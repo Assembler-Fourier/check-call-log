@@ -1,0 +1,11 @@
+# local state - never commit
+tool/cache/
+tool/config.json
+tool/edits/
+tool/settings.json
+Logs/
+Roster script/
+roster-link.json
+__pycache__/
+*.pyc
+*.part
