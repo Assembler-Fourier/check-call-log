@@ -5,6 +5,7 @@ are listed in SAME, with why. Each break runs in its own scratch folder (its own
 few at a time; nothing here touches the real roster or the tool's own files."""
 import concurrent.futures
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -82,8 +83,12 @@ BREAKS = {
     "the heading blue allowed": [("var MAY_CHANGE = {'#ffffff': 1, '#ffff00': 1, '#92d050': 1};", "var MAY_CHANGE = {'#ffffff': 1, '#ffff00': 1, '#92d050': 1, '#00b0f0': 1};")],
     "light grey allowed": [("var MAY_CHANGE = {'#ffffff': 1, '#ffff00': 1, '#92d050': 1};", "var MAY_CHANGE = {'#ffffff': 1, '#ffff00': 1, '#92d050': 1, '#999999': 1};")],
     "only four colours refused": [("        } else if (!MAY_CHANGE.hasOwnProperty(before)) {", "        } else if ({'#ff9900': 1, '#ff0000': 1, '#666666': 1, '#000000': 1}.hasOwnProperty(before)) {")],
-    "no expected-colour rule": [("        } else if (q.was && before !== String(q.was).toLowerCase()) {", "        } else if (false) {")],
-    "expected colour in exact letters": [("before !== String(q.was).toLowerCase()", "before !== String(q.was)")],
+    "no expected-colour rule": [("        } else if (q.was && before !== everyday(q.was)) {", "        } else if (false) {")],
+    "expected colour in exact letters": [("before !== everyday(q.was)", "before !== String(q.was)")],
+    # version 4 (14 Nov): a few shades off white/yellow/green is that colour - and only a few
+    "no near-colour rule": [("    if (near) return keys[k];", "")],
+    "far too generous near-colour": [("var NEAR = 12;", "var NEAR = 60;")],
+    "the cell's colour taken exactly": [("        var before = everyday(cell.getBackground());", "        var before = String(cell.getBackground()).toLowerCase();")],
     "an empty expected colour refuses": [("q.was && before !==", "q.was !== undefined && before !==")],
     "white on yellow allowed": [("        } else if (q.action === 'white' && before === YELLOW) {", "        } else if (false) {")],
     # the log
@@ -98,7 +103,7 @@ SAME = {
 def make(name, edits):
     folder = os.path.join(BASE, "tool-%d" % abs(hash(name)))
     os.makedirs(os.path.join(folder, "tests"), exist_ok=True)
-    for mod in ("calllog.py", "forms.py", "xl.py"):
+    for mod in ("calllog.py", "forms.py", "xl.py", "whatsapp.py", "wa_bridge.py", "wa_beta.py"):  # include the local import chain
         shutil.copy(os.path.join(TOOL, mod), folder)
     src = SOURCE
     for old, new in edits:
@@ -118,9 +123,25 @@ def run(name, folder):
     try:
         p = subprocess.run([sys.executable, os.path.join(HERE, "t_script.py")], capture_output=True, text=True, timeout=300, env=env,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        return p.returncode, [l for l in p.stdout.splitlines() if l.startswith("FAIL")], next((l for l in p.stdout.splitlines() if "checks passed" in l), "")
-    except subprocess.TimeoutExpired:
-        return "timeout", [], ""
+        lines = p.stdout.splitlines()
+        summary = next((l for l in reversed(lines) if re.fullmatch(r"\d+ of \d+ checks passed", l)), "")
+        return p.returncode, [l for l in lines if l.startswith("FAIL  ")], summary, p.stderr
+    except subprocess.TimeoutExpired as exc:
+        stderr = exc.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        return "timeout", [], "", stderr
+
+
+def caught(code, fails, stderr):
+    # A process crash, missing dependency or timeout is not evidence that an assertion caught this break.
+    import_failed = re.search(r"^(?:\w+\.)?(?:ImportError|ModuleNotFoundError):", stderr, re.MULTILINE)
+    return isinstance(code, int) and code != 0 and bool(fails) and not import_failed
+
+
+def passed(code, fails, summary, stderr):
+    counts = re.fullmatch(r"(\d+) of (\d+) checks passed", summary)
+    return code == 0 and not fails and not stderr.strip() and counts is not None and int(counts[1]) == int(counts[2]) > 0
 
 
 jobs = {"(no break)": []}
@@ -130,16 +151,23 @@ with concurrent.futures.ThreadPoolExecutor(4) as pool:
     done = dict(zip(jobs, pool.map(lambda n: run(n, folders[n]), list(jobs))))
 results = []
 for name in jobs:
-    code, fails, summary = done[name]
+    code, fails, summary, stderr = done[name]
+    detected = caught(code, fails, stderr)
     if name == "(no break)":
-        ok = code == 0
+        ok = passed(code, fails, summary, stderr)
         print("%s  the script as it is passes every check  %s" % ("PASS" if ok else "FAIL", summary))
     elif name in SAME:
-        ok = True
-        print("SAME  %-40s %s  (%s)" % (name, "caught" if code != 0 else "not caught", SAME[name]))
+        ok = detected or passed(code, fails, summary, stderr)
+        print("%s  %-40s %s  (%s)" % ("SAME" if ok else "FAIL", name, "caught" if detected else "not caught", SAME[name]))
     else:
-        ok = code != 0
-        print("%s  broken: %-40s %s" % ("PASS" if ok else "FAIL", name, ("caught by: " + fails[0][6:90]) if fails else "NOT CAUGHT - a gap in the checks"))
+        ok = detected
+        detail = ("caught by: " + fails[0][6:90]) if detected else (
+            "CHILD FAILURE - not a valid mutation result" if code != 0 else "NOT CAUGHT - a gap in the checks")
+        print("%s  broken: %-40s %s" % ("PASS" if ok else "FAIL", name, detail))
+    if not ok:
+        print("  child exit: %s; summary: %s" % (code, summary or "missing"))
+        for line in stderr.strip().splitlines()[-20:]:
+            print("  child stderr: " + line)
     results.append(ok)
 shutil.rmtree(BASE, ignore_errors=True)
 print("\n%d of %d checks passed" % (sum(results), len(results)))

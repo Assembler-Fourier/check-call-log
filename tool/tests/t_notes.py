@@ -85,7 +85,7 @@ notes = ["IMPORTANT NOTE", "Important reminder", "Reminder 5pm", "TBC", "tba", "
 check("notes are notes, wherever they are typed", all(c.is_note(t) for t in notes), [t for t in notes if not c.is_note(t)])
 people = ["Dmitri O'Iyer", "Roland De Sutton", "Victor de Sutton", "Ali bin Omar", "Tomas (Malow) Lindqvist", "Rory 'Hollis' Orwell",
           "Tobias", "Ivan", "Noel Ring", "Nora Keys", "Rutledge khan", "Sai kiran farrow", "Mehmet 'Memo' Yilmaz", "Memo Ozdemir",
-          "N.B. Reddy", "Al Jankowski", "Johnny Cash", "Billie Holiday", "Alicia Keys", "Lena Drayton (TBC)", "Glen Ivers (to confirm)",
+          "N.B. Reddy", "Al Janek", "Johnny Cash", "Billie Holiday", "Alicia Keys", "Lena Drayton (TBC)", "Glen Ivers (to confirm)",
           "Will (agency)", "Omar al-Farouq al-Masri", "Pádraig Mac an tSaoir", "José de los Ríos", "Dorian Sandler!", "Nthan Chaudry NB keys",
           "Morgan Read", "Lena Drayton to cover"]    # ("Read ..." first is taken as a note: "Read comment" is likelier here)
 check("people are never notes, whatever follows their name", not any(c.is_note(t) for t in people), [t for t in people if c.is_note(t)])
@@ -119,20 +119,20 @@ said = [n for n in henry["notes"] if "IMPORTANT NOTE" in n]
 check("...and one line says the roster has a note beside Perch Kilcarran, in a comment on that cell, among the first three",
       len(said) == 1 and "comment on that cell" in said[0] and said[0] in henry["notes"][:3], henry["notes"][:3])
 check("12 Oct (nobody at Perch Kilcarran that day): no line about it",
-      not any("IMPORTANT NOTE" in n for w in ("Soren Rasmussen", "Henry Marlow") for n in log_of(base, D(2026, 10, 12), w)["notes"]))
-basil = log_of(base, D(2026, 10, 22), "Basil Jankowski")
+      not any("IMPORTANT NOTE" in n for w in ("Soren Rask", "Henry Marlow") for n in log_of(base, D(2026, 10, 12), w)["notes"]))
+basil = log_of(base, D(2026, 10, 22), "Basil Janek")
 check("22 Oct, Basil: 'Important reminder' is not a person to call, and his log says there is a note under Loft",
       all(x["name"] != "Important reminder" for x in basil["calls"]) and any(n.startswith("Roster note under Loft: 'Important reminder'") for n in basil["notes"]))
 check("...Soren's day log does not mention it (Loft's 22:00 calls are Basil's)",
-      not any("Important reminder" in n for n in log_of(base, D(2026, 10, 22), "Soren Rasmussen")["notes"]))
+      not any("Important reminder" in n for n in log_of(base, D(2026, 10, 22), "Soren Rask")["notes"]))
 check("20 Oct: 'Reminder 5pm' under the control room is on both controllers' logs",
-      all(any("'Reminder 5pm'" in n for n in log_of(base, D(2026, 10, 20), w)["notes"]) for w in ("Soren Rasmussen", "Lena Drayton")))
-sun = [log_of(base, D(2026, 10, 25), w) for w in ("Soren Rasmussen", "Lena Drayton")]
+      all(any("'Reminder 5pm'" in n for n in log_of(base, D(2026, 10, 20), w)["notes"]) for w in ("Soren Rask", "Lena Drayton")))
+sun = [log_of(base, D(2026, 10, 25), w) for w in ("Soren Rask", "Lena Drayton")]
 check("25 Oct: Wesley Carden's start time is 'TBC' - not on the log, and both logs say so in one plain line",
       all(not any(x["name"] == "Wesley Carden" and "Bullseye" in x["venue"] for x in log["calls"])
           and sum("Wesley Carden at Bullseye Club Darts / Pats has no start time on the roster yet ('TBC')" in n for n in log["notes"]) == 1
           and not any(n.startswith("Roster note") and "'TBC'" in n for n in log["notes"]) for log in sun), [l["notes"][:2] for l in sun])
-jul = log_of(base, D(2026, 7, 30), "Basil Jankowski")
+jul = log_of(base, D(2026, 7, 30), "Basil Janek")
 check("30 Jul: Wesley Carden, under a start typed '-close', is still called with the time above, and the log says why",
       ("Wesley Carden", "12 Harbour st", "22:00-close") in calls(jul)
       and any(n.startswith("Wesley Carden at 12 Harbour st: the start time above it is not filled in") for n in jul["notes"]))
@@ -145,18 +145,18 @@ sat = D(2026, 10, 24)
 empty = {(e["site"], e["shift"]) for e in (base.shifts(sat), base.empty[base.day_column(sat)])[1]}
 check("Sat 24 Oct: Lido has two 16:00-22:00 starts and The Old Haunt one, all still with nobody under them",
       {("Lido", "16:00-22:00"), ("The Old Haunt", "16:00-22:00")} <= empty, sorted(empty))
-day_log = log_of(base, sat, "Soren Rasmussen")
+day_log = log_of(base, sat, "Soren Rask")
 line = [n for n in day_log["notes"] if n.startswith("No name on the roster yet for")]
 check("...no call is made up for them, and the day log (whose calls those would be) says so in one line",
       not any("Lido" in x["venue"] or "Old Haunt" in x["venue"] for x in day_log["calls"]) and len(line) == 1
       and "Lido 16:00-22:00 (x2)" in line[0] and "The Old Haunt 16:00-22:00" in line[0], line)
 check("...the night log does not mention them", not any("Lido" in n or "Old Haunt" in n for n in log_of(base, sat, "Lena Drayton")["notes"]))
 named = fake({"FL182": ("Ann Example", NAME), "FL188": ("Ben Example", NAME)})
-got = calls(log_of(named, sat, "Soren Rasmussen"))
+got = calls(log_of(named, sat, "Soren Rask"))
 check("once names are typed under them they are called at Lido and at The Old Haunt (its label typed in other days' columns)",
       ("Ann Example", "Lido", "16:00-22:00") in got and ("Ben Example", "The Old Haunt", "16:00-22:00") in got, [g for g in got if "Example" in g[0]])
 check("...and only the slot still empty is left in the line",
-      [n for n in log_of(named, sat, "Soren Rasmussen")["notes"] if n.startswith("No name")] == ["No name on the roster yet for Lido 16:00-22:00 - nobody to call there yet  [FL183]"])
+      [n for n in log_of(named, sat, "Soren Rask")["notes"] if n.startswith("No name")] == ["No name on the roster yet for Lido 16:00-22:00 - nobody to call there yet  [FL183]"])
 
 # ---- notes typed into copies of the roster: the control room ----
 duty = lambda roster, day: [s["name"] for s in roster.duty(day)]

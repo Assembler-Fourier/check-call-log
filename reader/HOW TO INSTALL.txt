@@ -1,0 +1,165 @@
+NORTHWIND CHECK-CALL READER - the Chrome add-on
+=================================================
+
+What it does
+  Watches WhatsApp Web in Chrome and tells Check Call Log when a guard answers a check call.
+  Reader 1.5.2 with Check Call Log 6.27 can read tonight's verified guard conversations when you
+  explicitly start a read pass or switch Auto read on. It also opens an existing direct chat and prepares
+  an UNSENT draft when requested. Sending starts OFF. When you enable Sending and press a guard's
+  Send button, it can send that one reviewed message. Reading and preparing drafts do not send.
+  The reader bridge connects locally to this PC; WhatsApp handles any message you choose to send.
+
+  With it running, on Lena's shifts:
+    - a new automatic green needs a matched, dated confirming reply or the configured trusted rule;
+    - clear replies such as Yes / Ok / All good can confirm the correct shift; context, sender and
+      date still matter. A connected reader does not prove every closed chat can be classified;
+    - a clear, matched check-in without a question can also confirm the correct shift;
+    - Gideon O'Kellan, Ernest Chandler and Glen Haskell go green with no message (trusted);
+    - a voice note, a photo or anything else (e.g. "sorry I can't") shows in amber in the Response
+      column for you to look at - it stays white until you mark it.
+  If the add-on stops (Chrome closed, WhatsApp Web closed), Check Call Log says
+  "WhatsApp not connected" and you mark replies by hand, as before.
+
+Install it once (about one minute)
+  1. In Chrome, open:   chrome://extensions
+  2. Switch on "Developer mode" (top right). Leave it on - the add-on stops if it is switched off.
+  3. Press "Load unpacked" and choose this folder (if already installed, press its Reload button instead):
+        check-call-log\reader (in the folder you cloned)
+  4. Refresh your existing WhatsApp Web tab after installing (https://web.whatsapp.com).
+     If it is not already open, open it once. Keep that tab open all night.
+     You may pin the tab to keep it easy to find. Check the reader status below; pinning is not proof it is updating.
+  5. Close Check Call Log and open it again (the new version starts the part that listens).
+
+  Within a minute the line under the table says "WhatsApp connected".
+  After an add-on update, also refresh the WhatsApp Web tab so the new reader starts there.
+
+  The 7 November reader fixes do not require a new Google Sheets script or a new key.
+  Leave the existing version-3 roster script and its saved connection unchanged.
+  For a controller using the reader, a generated/prefilled "Ok" by itself cannot turn a new name green.
+  A recorded reply, an "Ok" explicitly chosen/typed by you, or the trusted-person rule is required.
+  Typing "Ok" over an existing generated "Ok" records your confirmation and supports Undo/Redo.
+  Until the first reader connection, the window says "WhatsApp not connected".
+
+  "Reader connected" means reports are arriving; it does not mean every conversation has been read.
+  Passive reading watches loaded chat-list previews and the open conversation. Most previews do not
+  identify who sent them. Use the reading controls below to visit the saved roster conversations.
+  "Verify reply" means a message was captured but its sender is unverified. "Reply not read" means no
+  verified reply has been captured; it does not mean the guard has not answered. You can inspect the
+  conversation yourself and record a response by hand when needed.
+  A new unclear message after an automatic confirmation
+  can return the name to white for review; it does not mean the guard cancelled. Manual Green-box decisions
+  stay yours. Unsent drafts do not count as messages, and emoji-only replies need a known message date.
+
+Reading tonight's chats (Check Call Log 6.27 and reader 1.5.2, Lena only)
+  - Auto read starts OFF each time the app opens. Nothing starts browsing at startup.
+    Auto read checks the roster once, then watches for changed messages and due check calls.
+    It leaves unchanged confirmed text replies alone. Waiting/partial checks retry after 5, 10, then
+    20 minutes, only until 90 minutes after that assignment starts. New activity can trigger a check sooner.
+    An unresolved call is still your review item when routine retries stop; it has not become a confirmation.
+  - Full check visits every verified roster chat once, including confirmed people. If Auto read is on,
+    it returns to watching afterward. Auto read: off stops automatic checking; Stop check stops a manual pass.
+    How reading works explains both modes and shows the last completed check, partial attempts and attention items.
+    Completed checks are remembered for this app session, so toggling Auto does not immediately repeat them.
+  - Choose Lena's live shift or a shift starting today. A pass visits each distinct person on that
+    displayed roster once, using the exact saved WhatsApp chat name AND verified phone number.
+    Two assignments for one guard share one conversation. Missing or ambiguous mappings are listed in
+    How reading works; the reader does not guess contacts or visit other controllers' rosters.
+  - Keep the WhatsApp tab visible, with All selected and its search box clear before starting.
+    It can sit beside Check Call Log. Do not minimise it, cover it completely or select another Chrome tab.
+    While WhatsApp is hidden, searching or still loading, the pass waits on the same tab and resumes
+    when it is ready. Recent typing/clicking delays the next guard. Changing the shift/controller,
+    replacing the tab or losing the connection stops the pass; review the reason before starting again.
+    A manual open-chat or draft request pauses the reading queue first.
+  - Progress shows chats visited and confirmed replies separately. Chats visited 10/43 means ten conversations were
+    visited in that check; it does not mean ten guards confirmed. How reading works lists missing chats, ambiguity, partial
+    history and other problems. A connected reader or a completed pass alone does not prove every reply.
+  - The reader opens the verified conversation and reads dated messages with earlier context. History
+    that cannot be loaded completely, unclear sender/date information, media and attached reactions can
+    still need manual review. Long messages are retained as a short preview and explicitly marked incomplete;
+    their affirmative opening words cannot confirm a shift. An incomplete or interrupted pass is not complete conversation coverage.
+    Check the actual conversation before treating an uncertain response as confirmation.
+  Confirmations and reactions
+  - An explicit, dated check-call question for the guard's unique venue can be answered before the
+    scheduled check time. A verified reply confirms it immediately and supplies the reply clock.
+    Another day's question, an ambiguous assignment or a later cancellation cannot confirm tonight.
+  - A saved personal emoji rule can recognise a guard's usual standalone reply. It applies only to
+    that exact guard answering a verified question; it does not make the emoji affirmative for everyone.
+  - Waiting means the question was verified but no reply was captured. Recheck chat means newer
+    context or incomplete history still needs a verified read; it is not itself a reply or cancellation.
+  - A clear text confirmation stays valid when it is followed by a captionless sticker, once the reader
+    can verify the message order. A sticker by itself still needs your interpretation.
+  - A thumbs-up attached to the check-call question can confirm the guard when the reaction details
+    identify that guard. Your own reactions do not confirm a guard. The reader only views these details.
+  - WhatsApp does not show the reaction time in that viewer. The app identifies the question it belongs
+    to without inventing a reply time. Auto read rechecks attached reactions at most every 15 minutes
+    until 90 minutes after the assignment starts, because a removed reaction may not change the chat list.
+    Full check can recheck them at any time. Instant detection of reaction changes is not promised.
+  - A resolved WhatsApp loading notice can be replaced by the verified message from a newer complete
+    read. Unrelated, ambiguous or incomplete messages remain available for review.
+
+  - Reading never types into the message box or sends a message. Existing WhatsApp drafts and local
+    draft/contact preferences are preserved. This feature has synthetic automated checks; these
+    instructions do not claim that the updated reader has been reloaded or verified on the live page.
+
+Time of call
+  - As requested on 8 November, a guard's verified incoming reply supplies the logged time. It can be
+    earlier than the generated schedule time. The question's outgoing time is not used as the reply time.
+    Overnight replies retain their actual date. A time you entered by hand takes priority.
+  - Without a reliable incoming message clock, the generated time remains. An attached thumbs-up can
+    confirm the guard but WhatsApp does not supply its exact time, so no reaction time is invented.
+    Hover a row or open its message details to see the evidence behind its time and response.
+
+Draft beta (Check Call Log 6.27, Lena only)
+  - Open Messages & drafts to see the current or upcoming-today shift, contact matches and local drafts.
+    Find searches guard, venue and start time (Ctrl+F). The counted All, Waiting, Review and Confirmed
+    filters narrow that list. Clear Find or choose All if a call is hidden. Trusted is separate from Confirmed.
+  - Create local drafts saves missing drafts for the displayed shift in one operation and preserves
+    existing edits. This action does not change WhatsApp.
+  - Review a selected draft and its recipient, mark it reviewed, then choose Prepare in WhatsApp.
+  - The app reports success only after WhatsApp verifies the result. Existing composer text is
+    preserved. A blocked or uncertain result needs your check; it is never automatically retried.
+  - Sending (asked for by Lena on 8 Nov): OFF every time the app starts. Switch "Sending" on, review a
+    guard's message, then press "Send to <name>" - ONE message, only to that guard's verified chat, only the
+    exact reviewed text, on your live shift, only into an empty box (or one already holding exactly that text). It reports "sent"
+    only when WhatsApp shows the message in the chat; anything less says to check the chat and is never retried.
+    Test it first with Test my chat > Send test message (your own chat only). You can still press Send in
+    WhatsApp yourself instead. Switching Sending off cancels a pending send; if Send was already
+    authorised, inspect the chat because it may already have been sent. There is no automatic retry.
+    Changing the bound draft, contact or shift also cancels its pending action. A result already verified
+    as sent stays sent; cancellation cannot take back a message that WhatsApp already received.
+  - A fresh reader connection does not necessarily mean the draft bridge is ready. Reload this
+    extension AND refresh the existing WhatsApp tab after every update of this add-on. Keep All selected.
+    Restart Check Call Log as well so both sides of the connection use the new protocol.
+  - Keep WhatsApp on screen while opening a chat or preparing a draft. It can sit beside Check Call Log;
+    do not minimise it, cover it completely, or select another Chrome tab during the request.
+    After bringing it back, wait for the app to show Drafts ready. Clear any chat search yourself
+    with its X and select All. The app gives a specific reason if the draft tools are unavailable.
+  - A request can wait briefly for the reader to collect it. If the reader becomes unavailable before
+    starting, the request stops without changing WhatsApp. Retry explicitly after the connection recovers.
+  - A verified draft stays verified if search cleanup needs your help. Follow the separate cleanup note;
+    do not assume the draft failed or prepare it again without checking the composer.
+  - If WhatsApp's message rows do not identify the recipient, the reader opens Contact info and
+    checks the visible name and dedicated phone field against the saved contact. About text cannot
+    substitute for a phone number. It leaves that panel open for review.
+    Missing, conflicting or unsupported identity information blocks preparation.
+  - Drafts off cancels outstanding draft requests. If insertion was already authorised, the result may be
+    uncertain: inspect the composer. Requests are not automatically replayed after a restart or timeout.
+  - Test my chat uses only the configured, allowed self-contact. It reports opening and preparation
+    separately. Existing composer text is preserved. Only Send test message sends the test text.
+    A successful self-test does not
+    verify every guard contact or every WhatsApp message layout.
+  - The contact catalog retains the full imported book. Only verified roster matches are used;
+    ambiguous entries remain available for later review. New-reply sound is optional.
+  - Draft transport has automated fixture coverage; check the real page before relying on it.
+
+Keep in mind
+  - Leave the WhatsApp Web tab on the plain chat list ("All"), not searching. Chat on the phone or the
+    WhatsApp app as usual; requested drafts use the existing Chrome tab.
+  - Never open WhatsApp Web in a second Chrome tab - that switches the first one off ("Use here").
+  - Verify a real read pass with WhatsApp visible before relying on it: check progress, the exact guard/shift,
+    captured dated messages and any review items. Automatic navigation pauses when WhatsApp is hidden.
+    Passive background reports alone do not prove that all closed conversations are being read. Automated
+    checks use synthetic messages; they do not prove the live page.
+
+If the secret ever changes (python tool\whatsapp.py setup was run again), press the reload arrow on
+the add-on in chrome://extensions and refresh the WhatsApp Web tab.

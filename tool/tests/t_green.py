@@ -25,6 +25,7 @@ linked = lambda: open(REAL_LINK, encoding="utf-8").read() if os.path.exists(REAL
 before = {"fixture": digest(FIXTURE), "link": linked()}
 
 from drive6 import Rig  # noqa: E402
+from drive import quiet_state  # noqa: E402
 import fakescript  # noqa: E402
 
 total = []
@@ -95,14 +96,16 @@ rig.check("...and its note says orange, not 'coloured differently'", any("Ruben 
 first = next(c for c in calls if state(rig, c["name"]) == "off")
 rig.click("calls", row_of(rig, first["name"]), "ok")
 rig.check("not switched on: a click opens the link box and sends nothing", rig.app.link_box is not None and rig.app.link_box.winfo_exists() and not rig.fake.sent)
-rig.check("...the box is off the screen with the test window (never in front of the user)", rig.app.link_box.winfo_rootx() < 0, rig.app.link_box.winfo_rootx())
+quiet = {"root": quiet_state(rig.root), "dialog": quiet_state(rig.app.link_box)}
+rig.check("...root and link dialog are invisible, click-through and never foreground",
+          all(s["alpha"] == 0.0 and s["click_through"] and s["no_activate"] and not s["foreground"] for s in quiet.values()), quiet)
 rig.check("...the script and the steps are written out (to the scratch folder here)",
           os.path.exists(os.path.join(WORK, "Roster script", "Roster script.gs")) and os.path.exists(os.path.join(WORK, "Roster script", "How to switch it on.txt")))
 fields = [w for w in rig.app.link_box.winfo_children() if w.winfo_class() == "Frame"]
 entry = next(w for f in [rig.app.link_box] + list(rig.app.link_box.winfo_children()) for w in [f] + list(f.winfo_children()) if w.winfo_class() == "Entry")
 save = next(w for f in rig.app.link_box.winfo_children() for w in f.winfo_children() if getattr(w, "text", "") == "Save and test")
 entry.delete(0, "end")
-entry.insert(0, "https://docs.google.com/spreadsheets/d/1DemoRosterSheetIdNotARealOne_0123456789abcd/edit")
+entry.insert(0, "https://docs.google.com/spreadsheets/d/1NwDemoRosterSheetIdNotARealOne0000000000000/edit")
 rig.press(save)
 rig.check("a link that is not the script's is turned down, not saved, nothing sent",
           "not the link" in rig.app.link_msg.cget("text") and rig.rc.load()["url"] == "" and not rig.fake.sent, rig.app.link_msg.cget("text"))
@@ -187,12 +190,75 @@ settle(rig, n + 4)
 rig.check("a key that does not match the script: refused, nothing changed", state(rig, a["name"]) == "off" and "wrong key" in rig.said(), rig.said())
 total += rig.close()
 
+# -- 2b. Auto green off: a name turned green by hand gets the minute of the click as its time of call ----------------
+case("2b. Auto green off: the time of call becomes the minute the name was turned green (Lena, 21 Nov)")
+rig = rig_for("g2b", "2026-10-23 20:06")
+rig.rc.save({"url": URL, "key": rig.rc.load()["key"]})
+rig.show("Lena Drayton", "2026-10-23")
+key_of = rig.calllog.edit_key
+now_of = lambda call: next(c for c in rig.calls() if key_of(c) == key_of(call))
+rig.check("Auto green is off for Lena in this window", not rig.app.auto_green)
+whites = [c for c in rig.calls() if state(rig, c["name"]) == "off" and sum(1 for x in rig.calls() if x["name"] == c["name"]) == 1]
+due = next(c for c in whites if not c["call_text"])                       # like Jasper Albrecht: "due 20:30"
+made = next(c for c in whites if c["call_text"] and not c["timed"] and c["call_text"] != "20:06")
+typed = next(c for c in whites if c["call_text"] and not c["timed"] and key_of(c) != key_of(made))
+spare = next(c for c in whites if key_of(c) not in {key_of(due), key_of(made), key_of(typed)})
+n = len(rig.fake.sent)
+rig.click("calls", row_of(rig, due["name"]), "ok")
+settle(rig, n + 1)
+got = now_of(due)
+rig.check("a call still due turned green at 20:06: green on the roster, and its time of call is 20:06",
+          rig.fake.sent[-1][:3] == ("green", due["ref"], due["name"]) and g_on(rig, due) and got["call_text"] == "20:06", (got["call_text"], due["due"]))
+rig.check("...shown as a call made (not 'due'), marked as a time by hand, with the usual Ok",
+          not got["ahead"] and got["timed"] and got["response"] == "Ok", (got["ahead"], got["timed"], got["response"]))
+rig.check("...and the line under the table says the time", "time of call 20:06" in rig.said(), rig.said())
+was = made["call_text"]
+rig.clock.set("2026-10-23 20:07")
+rig.click("calls", row_of(rig, made["name"]), "ok")
+settle(rig, n + 2)
+rig.check("a call made at its generated %s, turned green at 20:07: its time becomes 20:07" % was,
+          g_on(rig, made) and now_of(made)["call_text"] == "20:07", now_of(made)["call_text"])
+rig.key(rig.grid("calls").body, "<Control-z>")
+settle(rig, n + 3)
+rig.check("Ctrl+Z: white again on the roster and the generated time back", not g_on(rig, made) and now_of(made)["call_text"] == was
+          and not now_of(made)["timed"], now_of(made)["call_text"])
+rig.key(rig.grid("calls").body, "<Control-y>")
+settle(rig, n + 4)
+rig.check("Ctrl+Y: green again, at 20:07 again", g_on(rig, made) and now_of(made)["call_text"] == "20:07", now_of(made)["call_text"])
+rig.app.commit_call(key_of(typed), "time", "19:50")
+rig.pump(100)
+rig.click("calls", row_of(rig, typed["name"]), "ok")
+settle(rig, n + 5)
+rig.check("a time typed by hand is kept: green, still 19:50", g_on(rig, typed) and now_of(typed)["call_text"] == "19:50", now_of(typed)["call_text"])
+rig.click("calls", row_of(rig, typed["name"]), "ok")
+settle(rig, n + 6)
+rig.check("turning a name back to white leaves its time alone", not g_on(rig, typed) and now_of(typed)["call_text"] == "19:50")
+rig.fake.text[spare["ref"]] = "Somebody Else"                    # the roster refuses: the name does not turn green
+spare_was = spare["call_text"]
+rig.click("calls", row_of(rig, spare["name"]), "ok")
+settle(rig, n + 7)
+rig.check("the roster refused, so the name is not green: its time is not touched either",
+          not g_on(rig, spare) and now_of(spare)["call_text"] == spare_was and not now_of(spare)["timed"], now_of(spare)["call_text"])
+rig.fake.text[spare["ref"]] = spare["name"]
+rig.wait(lambda: not rig.app.sending and rig.app.view is not None, 10)
+rig.pump(300)
+rig.app.auto_for.add("Lena Drayton")
+spare_was = now_of(spare)["call_text"]
+m = len(rig.fake.sent)
+rig.click("calls", row_of(rig, spare["name"]), "ok")
+settle(rig, m + 1)
+rig.check("with Auto green on, a click green leaves the time as it was", g_on(rig, spare) and now_of(spare)["call_text"] == spare_was,
+          (now_of(spare)["call_text"], spare_was))
+rig.app.auto_for.discard("Lena Drayton")
+rig.check("no error inside the window", not rig.errors, rig.errors[:1])
+total += rig.close()
+
 # -- 3. Other days: no boxes, nothing sent ---------------------------------------------------------------------------
 case("3. Tomorrow and yesterday cannot be changed")
 rig = rig_for("g3", "2026-10-23 20:06")
 rig.rc.save({"url": URL, "key": rig.rc.load()["key"]})
 for day, words in (("2026-10-24", "tomorrow"), ("2026-10-22", "yesterday (a finished day)"), ("2026-10-30", "next week")):
-    rig.show("Lena Drayton" if day != "2026-10-22" else "Basil Jankowski", day)
+    rig.show("Lena Drayton" if day != "2026-10-22" else "Basil Janek", day)
     rows = [state(rig, c["name"]) for c in rig.calls()]
     rig.click("calls", 0, "ok")
     rig.key(rig.grid("calls").body, "<Control-g>")
@@ -223,9 +289,12 @@ case("5. The print, the dark look, closing while a request is out")
 rig = rig_for("g5", "2026-10-23 20:06")
 rig.rc.save({"url": URL, "key": rig.rc.load()["key"]})
 rig.show("Lena Drayton", "2026-10-23")
+target = next(c for c in rig.calls() if state(rig, c["name"]) == "off")
+# (21 Nov: with Auto green off, a click green gives a generated time the minute of the click - see 2b. A time typed
+#  by hand is kept, so with one the paper must not change at all: the green itself is never printed.)
+rig.app.commit_call(rig.calllog.edit_key(target), "time", "19:55")
 rig.app.flush()
 printed = rig.pdf_text(rig.files()["calls"])
-target = next(c for c in rig.calls() if state(rig, c["name"]) == "off")
 rig.click("calls", row_of(rig, target["name"]), "ok")
 settle(rig, 1)
 rig.app.flush()

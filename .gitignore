@@ -9,3 +9,7 @@ roster-link.json
 __pycache__/
 *.pyc
 *.part
+# WhatsApp reader: your own settings, contacts and the add-on's local key - never commit
+tool/whatsapp.json
+tool/whatsapp-names.json
+reader/config.js

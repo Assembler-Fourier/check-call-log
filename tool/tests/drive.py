@@ -1,4 +1,4 @@
-"""Drive the real window the way a person does - clicks and keys through the event loop - parked off-screen.
+"""Drive the real window through its event loop, transparent, click-through and never active.
 
     from drive import Rig
     rig = Rig("case-name", now="2026-10-05 20:06")      # the clock the window and the tool see (None = real time)
@@ -19,7 +19,9 @@ import os
 import tempfile
 import shutil
 import sys
+import time as _time
 import types
+import _tkinter
 
 sys.dont_write_bytecode = True                        # leave no .pyc behind in the tool folder
 HOME = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -64,10 +66,127 @@ def foreground_is_mine():
     if hwnd:
         _user.GetWindowThreadProcessId(hwnd, _ct.byref(pid))
     return pid.value == os.getpid()
+
+
+def _quiet_style(window):
+    """Only the native frame of this process's own Tk window is changed."""
+    _user.GetParent.argtypes, _user.GetParent.restype = [_wt.HWND], _wt.HWND
+    _user.GetWindowLongW.argtypes, _user.GetWindowLongW.restype = [_wt.HWND, _ct.c_int], _ct.c_long
+    _user.SetWindowLongW.argtypes, _user.SetWindowLongW.restype = [_wt.HWND, _ct.c_int, _ct.c_long], _ct.c_long
+    hwnd = _user.GetParent(window.winfo_id()) or window.winfo_id()
+    style = _user.GetWindowLongW(hwnd, -20)
+    _user.SetWindowLongW(hwnd, -20, style | 0x20 | 0x80 | 0x08000000)  # transparent, tool window, no activate
+    return hwnd
+
+
+def _quiet_window(window):
+    window.withdraw()
+    window.attributes("-alpha", 0.0)
+    window.update_idletasks()
+    _quiet_style(window)
+    # wm_transient may replace a Toplevel's native frame. Alpha remains zero;
+    # reapply the click-through/no-activate styles to the replacement on mapping.
+    window.bind("<Map>", lambda event: _quiet_style(window) if event.widget is window else None, add="+")
+    window.deiconify()
+
+
+def quiet_state(window):
+    """Read the actual opacity/styles/foreground state, without repairing them."""
+    hwnd = _user.GetParent(window.winfo_id()) or window.winfo_id()
+    style = _user.GetWindowLongW(hwnd, -20)
+    return {"alpha": float(window.attributes("-alpha")), "click_through": bool(style & 0x20),
+            "no_activate": bool(style & 0x08000000), "foreground": foreground_is_mine()}
+
+
+def quiet_root(tk):
+    """Hide the root AND every test Toplevel before either can paint.
+
+    Negative coordinates alone are insufficient on a multi-monitor desktop. Keep
+    the activation hook; every native frame is transparent and click-through.
+    """
+    never_activate()
+    if not getattr(tk.Toplevel, "_ccl_quiet", False):
+        original_init = tk.Toplevel.__init__
+
+        def quiet_toplevel(window, *args, **kwargs):
+            original_init(window, *args, **kwargs)
+            _quiet_window(window)                   # before the caller can pump/map the newly created dialog
+
+        tk.Toplevel.__init__ = quiet_toplevel
+        tk.Toplevel._ccl_quiet = True
+    # Native message boxes bypass tk.Toplevel. An unexpected one must fail a test,
+    # not put a visible modal on the work desktop. Expected confirmations are
+    # explicitly replaced by the individual rig/check as before.
+    from tkinter import messagebox
+
+    def unexpected_message(*args, **kwargs):
+        raise AssertionError("unexpected native message box in automated check")
+
+    for name in ("showerror", "showwarning", "showinfo"):
+        setattr(messagebox, name, unexpected_message)
+    root = tk.Tk()
+    # Tcl's own bgerror dialog bypasses Python Toplevel/messagebox and waits in
+    # a native modal loop. Record the complete error instead; every rig fails it.
+    errors = root._ccl_tcl_errors = []
+
+    def background_error(message, detail):
+        errors.append(str(message) + "\n" + str(detail))
+        print("FAIL Tcl background error:\n" + errors[-1], file=sys.stderr, flush=True)
+
+    root.createcommand("_ccl_test_bgerror", background_error)
+    root.tk.call("proc", "bgerror", "message", "global errorInfo; _ccl_test_bgerror $message $errorInfo")
+    _quiet_window(root)
+    return root
+
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.join(tempfile.gettempdir(), "ccl-tests")         # throwaway output; the checks themselves live in tool\tests
 if not isinstance(sys.stdout, io.TextIOWrapper) or sys.stdout.encoding.lower() != "utf-8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
+
+def event_slice(root, deadline, max_events=64):
+    """Dispatch ready Tcl events briefly, then return to the harness's Python deadline.
+
+    Tcl's update drains until no event remains; an after(0) producer can prevent it
+    returning. DoOneEvent keeps every event category, including idle/error handling,
+    but yields between dispatches. A single callback or native call can still block:
+    the external process timeout remains necessary and is not replaced by this cap.
+    """
+    end, dispatched = min(deadline, _time.monotonic() + .01), 0
+    # A bounded slice may end before ALL_EVENTS reaches its idle phase. Give
+    # geometry/redraw work a turn even while timers keep the ready queue busy.
+    # Unlike update_idletasks, this dispatch does not drain newly added idle work.
+    if max_events > 0 and _time.monotonic() < end:
+        dispatched += bool(root.tk.dooneevent(_tkinter.IDLE_EVENTS | _tkinter.DONT_WAIT))
+    while dispatched < max_events and _time.monotonic() < end:
+        if not root.tk.dooneevent(_tkinter.ALL_EVENTS | _tkinter.DONT_WAIT):
+            break
+        dispatched += 1
+    return dispatched
+
+
+def pump_for(root, ms):
+    end = _time.monotonic() + ms / 1000.0
+    while _time.monotonic() < end:
+        event_slice(root, end)
+        remaining = end - _time.monotonic()
+        if remaining > 0:
+            _time.sleep(min(.01, remaining))
+
+
+def wait_for(root, cond, seconds, settle_ms=0):
+    end = _time.monotonic() + seconds
+    while _time.monotonic() < end:
+        event_slice(root, end)
+        if cond():
+            if settle_ms:
+                pump_for(root, settle_ms)
+            return True
+        remaining = end - _time.monotonic()
+        if remaining > 0:
+            _time.sleep(min(.02, remaining))
+    return False
 
 
 class Clock:
@@ -133,7 +252,7 @@ class Rig:
         self.tk = tk
         never_activate()
         tk.Misc.bell = lambda widget, displayof=0: None      # a refused value rings the PC's bell: not during a test
-        self.root = tk.Tk()
+        self.root = quiet_root(tk)
         self.errors = []                              # anything that went wrong inside a Tk callback
 
         def went_wrong(exc, val, tb):
@@ -309,5 +428,7 @@ class Rig:
             if not self.app.gone:
                 self.wait(lambda: self.app.gone, 30)
         except Exception as e:
-            print("close:", e)
+            self.check("window teardown completed without exception", False, repr(e))
+        if self.root._ccl_tcl_errors:
+            self.check("no Tcl background errors", False, self.root._ccl_tcl_errors[0])
         return self.results

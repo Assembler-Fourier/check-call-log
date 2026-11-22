@@ -24,7 +24,7 @@ def check(label, ok, detail=""):
 
 D = datetime.date
 at = lambda text: datetime.datetime.strptime(text, "%Y-%m-%d %H:%M")
-roster = c.Roster()
+roster = c.Roster(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "demo", "roster-template.xlsx"))
 show = lambda rows: [(r["id"], r["start_text"], r["finish_text"], r["area"], r["notes"]) for r in rows]
 
 # ---- the usual rounds ----
@@ -34,7 +34,7 @@ check("shifts before 11 Oct keep the first rule (on the hour-ish, 22 / 01-02 / 0
 print("\n  usual rounds from 11 Oct on, by person:")
 seen, bad = {}, []
 for who, a, b in (("Lena Drayton", 1080, 1800), ("Lena Drayton", 990, 1800), ("Henry Marlow", 360, 1080), ("Henry Marlow", 990, 1800),
-                  ("Soren Rasmussen", 360, 1080), ("Basil Jankowski", 990, 1800)):
+                  ("Soren Rask", 360, 1080), ("Basil Janek", 990, 1800)):
     days = []
     for n in range(28):
         day = D(2026, 10, 11) + datetime.timedelta(days=n)
@@ -54,7 +54,7 @@ check("every round is inside the person's own shift, 10-30 minutes long, three a
 check("the same person and day always give the same times", c.usual_patrols(D(2026, 10, 17), "Lena Drayton", 1080, 1800) == c.usual_patrols(D(2026, 10, 17), "Lena Drayton", 1080, 1800))
 check("the times change from day to day", all(len(set(d)) >= 20 for d in seen.values()), {k: len(set(d)) for k, d in seen.items()})
 check("two people on the same shift on the same days do not get the same times",
-      sum(1 for x, y in zip(seen[("Henry Marlow", 990)], seen[("Basil Jankowski", 990)]) if x == y) == 0)
+      sum(1 for x, y in zip(seen[("Henry Marlow", 990)], seen[("Basil Janek", 990)]) if x == y) == 0)
 lean = lambda days: sum(d[0][0] for d in days) / float(len(days))
 print("   average first round:  " + ",  ".join("%s %s" % (k[0].split()[0], c.fmt(int(lean(d))).zfill(5)) for k, d in seen.items()))
 odd = c.usual_patrols(D(2026, 10, 14), "Cover Person", 840, 1320)

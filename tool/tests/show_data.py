@@ -11,7 +11,7 @@ import calllog as c  # noqa: E402
 WORK = os.path.join(tempfile.gettempdir(), "ccl-tests")         # throwaway output; the checks themselves live in tool\tests
 c.EDITS = os.path.join(WORK, "edits-show")
 shutil.rmtree(c.EDITS, ignore_errors=True)
-roster, day, who = c.Roster(), datetime.date(2026, 10, 3), "Lena Drayton"
+roster, day, who = c.Roster(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "demo", "roster-template.xlsx")), datetime.date(2026, 10, 3), "Lena Drayton"
 now = datetime.datetime(2026, 10, 4, 9, 0)
 log = c.build_patrols(day, roster, who, now=now)
 c.patrol_add(log, "19:40", "19:55", "Car park", "Barrier arm stuck up - reported")

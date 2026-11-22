@@ -12,7 +12,7 @@ import calllog as c  # noqa: E402
 WORK = os.path.join(tempfile.gettempdir(), "ccl-tests")         # throwaway output; the checks themselves live in tool\tests
 c.EDITS = os.path.join(WORK, "edits-ahead")
 shutil.rmtree(c.EDITS, ignore_errors=True)
-roster, day, who, now = c.Roster(), datetime.date(2026, 10, 10), "Lena Drayton", datetime.datetime(2026, 10, 10, 20, 10)
+roster, day, who, now = c.Roster(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "demo", "roster-template.xlsx")), datetime.date(2026, 10, 10), "Lena Drayton", datetime.datetime(2026, 10, 10, 20, 10)
 calls = c.build(day, roster, who, now=now)
 c.fill_ahead(calls, True)
 c.fill_ahead(c.build_patrols(day, roster, who, now=now), True)

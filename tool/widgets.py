@@ -1,7 +1,7 @@
 """The parts the window is made of, each drawn on a canvas from the skin: buttons, tabs, chips, rounded panels and
 fields, notices, the shift ribbon, the month calendar and the page preview.
 
-Rules they all keep (from the research behind the redesign): nothing moves, fades or makes a sound;
+Rules they all keep (from the research behind the redesign, see CLAUDE.md): nothing moves, fades or makes a sound;
 hover and pressed are instant; every control that can be clicked can also be reached with Tab and pressed with
 Space or Enter, and shows a ring when the keyboard is on it; an icon never stands without its word; colour is
 never the only sign of anything.
@@ -255,6 +255,7 @@ class Notice(tk.Canvas):
     def paint(self):
         skin, px = self.skin, self.skin.px
         self.delete("all")
+        had_focus = self.button is not None and self.focus_get() is self.button
         if self.button:
             self.button.destroy()
             self.button = None
@@ -263,17 +264,28 @@ class Notice(tk.Canvas):
             return
         w = max(self.winfo_width(), px(200))
         tone, tint, icon = {"check": ("amber", "amber_tint", "warning"), "wrong": ("red", "red_tint", "error")}.get(self.kind, ("ink2", "sunk", "info"))
-        room = w - px(46) - (px(110) if self.action else px(12))
-        words = self.create_text(px(40), px(9), text=self.text, font=skin.font("body"), fill=skin["ink"], anchor="nw", width=room)
-        tall = max(px(36), self.bbox(words)[3] + px(9))
+        action_width = 0
+        if self.action:
+            self.button = Button(self, skin, self.action[0], self.action[1], kind="plain", back=tint, height=26)
+            action_width = int(self.button.cget("width"))
+        stacked = bool(self.action and w - px(60) - action_width < px(160))
+        room = w - px(52) - (action_width + px(12) if self.action and not stacked else 0)
+        words = self.create_text(px(40), px(9), text=self.text, font=skin.font("body"), fill=skin["ink"],
+                                 anchor="nw", width=max(px(40), room), tags="notice_text")
+        text_bottom = self.bbox(words)[3]
+        tall = max(px(36), text_bottom + px(9))
+        if stacked:
+            tall = text_bottom + px(8 + 26 + 9)
         self.configure(height=tall + px(6))
         skin.box(self, 0, 0, w, tall, px(4), skin[tint], None)
         self.create_rectangle(0, px(4), px(3), tall - px(4), fill=skin[tone], outline="")
         self.create_text(px(22), tall // 2, text=skin.icon(icon) or "!", font=skin.font("icon"), fill=skin[tone])
         self.tag_raise(words)
         if self.action:
-            self.button = Button(self, skin, self.action[0], self.action[1], kind="plain", back=tint, height=26)
-            self.create_window(w - px(8), tall // 2, window=self.button, anchor="e")
+            self.create_window(px(40) if stacked else w - px(8), text_bottom + px(8) if stacked else tall // 2,
+                               window=self.button, anchor="nw" if stacked else "e", tags="notice_action")
+            if had_focus:
+                self.button.focus_set()
 
 
 class Ribbon(tk.Canvas):
@@ -382,21 +394,58 @@ class Calendar(tk.Canvas):
 
     def __init__(self, parent, skin, on_pick, shift_kind, back="panel"):
         px = skin.px
-        super().__init__(parent, bg=skin[back], highlightthickness=0, width=px(280), height=px(30 + 20 + 6 * 34 + 24), takefocus=0)
+        super().__init__(parent, bg=skin[back], highlightthickness=0, width=px(280), height=px(30 + 20 + 6 * 34 + 24), takefocus=1)
         self.skin, self.on_pick, self.shift_kind = skin, on_pick, shift_kind       # shift_kind(date) -> "day", "night" or None
         self.today = datetime.date.today()
         self.year, self.month, self.chosen, self.cells = self.today.year, self.today.month, [], {}
+        self.cursor, self.focused = self.today, False
         self.bind("<Configure>", lambda e: self.draw())
         self.bind("<Button-1>", self.click)
+        self.bind("<FocusIn>", lambda e: self.focus_changed(True))
+        self.bind("<FocusOut>", lambda e: self.focus_changed(False))
+        self.bind("<KeyPress>", self.key)
+
+    def focus_changed(self, focused):
+        self.focused = focused
+        self.draw()
+
+    def key(self, event):
+        """Move a visible date cursor without changing a log until Enter/Space is pressed."""
+        steps = {"Left": -1, "Right": 1, "Up": -7, "Down": 7}
+        try:
+            if event.keysym in steps:
+                self.cursor += datetime.timedelta(days=steps[event.keysym])
+            elif event.keysym in ("Prior", "Next"):
+                self.turn(-1 if event.keysym == "Prior" else 1)
+                return "break"
+            elif event.keysym in ("Home", "End"):
+                self.cursor = self.today if event.keysym == "Home" and event.state & 0x0004 else datetime.date(
+                    self.year, self.month, 1 if event.keysym == "Home" else calendar.monthrange(self.year, self.month)[1])
+            elif event.keysym in ("Return", "KP_Enter", "space"):
+                self.on_pick([self.cursor], add=bool(event.state & 0x0004))
+                return "break"
+            else:
+                return None
+        except (ValueError, OverflowError):
+            return "break"                      # calendar bounds never escape as a Tk callback error
+        self.year, self.month = self.cursor.year, self.cursor.month
+        self.draw()
+        return "break"
 
     def turn(self, step):
         month = self.month - 1 + step
-        self.year, self.month = self.year + month // 12, month % 12 + 1
+        year, month = self.year + month // 12, month % 12 + 1
+        if not 1 <= year <= 9999:
+            return
+        self.year, self.month = year, month
+        self.cursor = datetime.date(year, month, min(self.cursor.day, calendar.monthrange(year, month)[1]))
         self.draw()
 
     def show(self, chosen):
         """Mark the chosen days. The month on view only changes when a newly chosen day is not in it."""
         chosen = list(chosen)
+        if chosen and chosen != self.chosen:
+            self.cursor = chosen[-1]
         if chosen and chosen != self.chosen and not any((d.year, d.month) == (self.year, self.month) for d in chosen):
             self.year, self.month = chosen[-1].year, chosen[-1].month
         self.chosen = chosen
@@ -413,10 +462,11 @@ class Calendar(tk.Canvas):
         for col, day in enumerate(("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")):
             self.create_text(int((col + 0.5) * cw), px(38), text=day, font=skin.font("caption"), fill=skin["ink3"])
         self.cells = {}
-        for r, week in enumerate(calendar.Calendar(0).monthdatescalendar(self.year, self.month)):
-            for col, d in enumerate(week):
-                if d.month != self.month:
+        for r, week in enumerate(calendar.Calendar(0).monthdayscalendar(self.year, self.month)):
+            for col, number in enumerate(week):
+                if not number:
                     continue
+                d = datetime.date(self.year, self.month, number)
                 self.cells[(r, col)] = d
                 cx, cy = int((col + 0.5) * cw), top + r * row + px(13)
                 kind, picked = self.shift_kind(d), d in self.chosen
@@ -428,6 +478,9 @@ class Calendar(tk.Canvas):
                                  fill=skin["on_accent"] if picked else skin["ink"] if kind else skin["ink3"])
                 if kind and not picked:
                     self.create_image(cx, cy + px(15), image=skin.mark("dot" if kind == "night" else "ring", px(6) if kind == "night" else px(7), skin["ink2"]))
+                if self.focused and d == self.cursor:
+                    self.create_rectangle(cx - px(16), cy - px(16), cx + px(16), cy + px(16),
+                                          outline=skin["ink"] if picked else skin["accent"], width=max(1, px(2)), tags="date_focus")
         y = top + 6 * row + px(8)
         x = px(4)
         for shape, word in (("dot", "night shift"), ("ring", "day shift")):
@@ -438,12 +491,14 @@ class Calendar(tk.Canvas):
 
     def click(self, event):
         px, w = self.skin.px, max(self.winfo_width(), 1)
+        self.focus_set()
         if event.y < px(28):
             if event.x < px(40) or event.x > w - px(40):
                 self.turn(-1 if event.x < px(40) else 1)
             return
         d = self.cells.get((int((event.y - px(50)) // px(34)), int(event.x // (w / 7.0))))
         if d:
+            self.cursor = d
             self.on_pick([d], add=bool(event.state & 0x0004))     # Ctrl adds another day
 
 

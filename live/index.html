@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Check Call Log – live demo</title>
+<meta name="description" content="Check Call Log running in your browser: tonight's check calls, patrol log and shift log built from a made-up security roster, printed like the paper forms.">
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --ink: #16191f; --ink2: #4a5260; --ink3: #7a8392; --line: #e3e6eb;
+  --accent: #1f5fbf; --accent-ink: #ffffff; --green: #2f7d32; --green-bg: #e7f4e8; --amber: #8a5a00; --amber-bg: #fff4dc;
+  --zebra: #fafbfc; --shadow: 0 1px 2px rgba(20,25,35,.06), 0 4px 16px rgba(20,25,35,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1216; --card: #171b21; --ink: #e8ebf0; --ink2: #b3bac6; --ink3: #818996; --line: #272d36;
+    --accent: #5b9bf0; --accent-ink: #0b1018; --green: #7cc884; --green-bg: #17301c; --amber: #f0c060; --amber-bg: #33280f;
+    --zebra: #1a1f26; --shadow: none; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+a { color: var(--accent); }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+header.top { border-bottom: 1px solid var(--line); background: var(--card); }
+header.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; gap: 12px; }
+.brand { font-weight: 600; letter-spacing: .1px; }
+.tag { font-size: 12px; font-weight: 600; color: var(--accent); border: 1px solid var(--accent); border-radius: 99px; padding: 1px 8px; margin-left: 8px; }
+h1 { font-size: 28px; line-height: 1.2; margin: 32px 0 8px; letter-spacing: -.3px; }
+.lede { color: var(--ink2); max-width: 760px; margin: 0 0 24px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+form.controls { display: flex; flex-wrap: wrap; gap: 16px 20px; align-items: flex-end; padding: 16px 18px; }
+label { display: grid; gap: 4px; font-size: 13px; color: var(--ink2); }
+input[type=date], select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; min-width: 180px; }
+fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; }
+legend { font-size: 13px; color: var(--ink2); padding: 0; margin-bottom: 4px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg span { display: block; padding: 7px 12px; cursor: pointer; color: var(--ink2); }
+.seg input:checked + span { background: var(--accent); color: var(--accent-ink); }
+.seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+button.go { font: inherit; font-weight: 600; background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 9px 18px; cursor: pointer; }
+button.go:disabled { opacity: .5; cursor: progress; }
+#status { color: var(--ink2); margin: 14px 2px; min-height: 1.5em; }
+#status.bad { color: #c0392b; }
+.summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; padding: 18px; border-bottom: 1px solid var(--line); }
+.summary h2 { margin: 0; font-size: 20px; }
+.summary p { margin: 2px 0 0; color: var(--ink2); }
+.downloads { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.downloads a { text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; color: var(--ink); background: var(--bg); font-size: 14px; }
+.downloads a.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.tabs { display: flex; gap: 4px; padding: 8px 12px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tabs button { font: inherit; background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 10px; color: var(--ink2); cursor: pointer; white-space: nowrap; }
+.tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.count { font-size: 12px; color: var(--ink3); margin-left: 4px; }
+.panel { padding: 0; }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; font-size: 12px; font-weight: 600; color: var(--ink3); text-transform: uppercase; letter-spacing: .4px; padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr:nth-child(even) td { background: var(--zebra); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.ahead td { color: var(--ink3); }
+tr.strike td.name { text-decoration: line-through; }
+.ok { display: inline-block; background: var(--green-bg); color: var(--green); border-radius: 6px; padding: 0 8px; font-weight: 600; }
+.due { color: var(--accent); }
+.empty { padding: 24px 18px; color: var(--ink2); }
+ul.notes { margin: 0; padding: 14px 18px 18px 36px; }
+ul.notes li { margin: 4px 0; color: var(--ink2); }
+.shiftlog { padding: 16px 18px; display: grid; gap: 10px; }
+.shiftlog dt { font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: var(--ink3); }
+.shiftlog dd { margin: 0 0 6px; }
+.pages { display: grid; gap: 16px; padding: 16px; justify-items: center; background: var(--bg); border-radius: 0 0 12px 12px; }
+.pages canvas { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); max-width: 100%; height: auto; }
+.how { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 28px 0; }
+.how div { padding: 16px 18px; }
+.how h3 { margin: 0 0 6px; font-size: 15px; }
+.how p { margin: 0; color: var(--ink2); font-size: 14px; }
+footer { color: var(--ink3); font-size: 13px; padding: 24px 0 40px; }
+@media (max-width: 640px) { h1 { font-size: 23px; } input[type=date], select { min-width: 0; width: 100%; } form.controls > label { flex: 1 1 100%; } }
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <div class="brand">Check Call Log <span class="tag">live demo</span></div>
+  <a href="https://github.com/Assembler-Fourier/check-call-log">Source on GitHub</a>
+</div></header>
+
+<main class="wrap">
+  <h1>Tonight's check calls, made from the roster</h1>
+  <p class="lede">This is Check Call Log's own Python code, running in your browser (through Pyodide) on a made-up roster
+    for "Northwind Security". Pick a night and a controller: it works out everyone who needs a check call during that
+    shift and when, plus the patrol log and the shift log, and prints all three like the paper forms in the binder.
+    Nothing leaves your browser.</p>
+
+  <form class="controls card" id="controls">
+    <label>Night<input type="date" id="date" required></label>
+    <label>Controller<select id="who" disabled><option>Loading…</option></select></label>
+    <fieldset>
+      <legend>Show it</legend>
+      <div class="seg">
+        <label><input type="radio" name="when" value="now" checked><span>As it is right now</span></label>
+        <label><input type="radio" name="when" value="done"><span>After the shift</span></label>
+      </div>
+    </fieldset>
+    <button class="go" id="go" type="submit" disabled>Make the logs</button>
+  </form>
+  <p id="status" role="status" aria-live="polite">Loading Python into the page (about 10 MB, the first time only)…</p>
+
+  <section class="card" id="result" hidden>
+    <div class="summary">
+      <div><h2 id="who-head"></h2><p id="when-line"></p></div>
+      <div class="downloads">
+        <a class="primary" id="dl-all" download>All three forms (PDF)</a>
+        <a id="dl-calls" download>Check call log (PDF)</a>
+        <a id="dl-xlsx" download>Spreadsheet (.xlsx)</a>
+      </div>
+    </div>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-calls" aria-selected="true" aria-controls="panel-calls">Check calls<span class="count" id="n-calls"></span></button>
+      <button role="tab" id="tab-patrols" aria-selected="false" aria-controls="panel-patrols">Patrol log<span class="count" id="n-patrols"></span></button>
+      <button role="tab" id="tab-shift" aria-selected="false" aria-controls="panel-shift">Shift log</button>
+      <button role="tab" id="tab-print" aria-selected="false" aria-controls="panel-print">As it prints</button>
+      <button role="tab" id="tab-notes" aria-selected="false" aria-controls="panel-notes">Notes<span class="count" id="n-notes"></span></button>
+    </div>
+    <div class="panel scroll" id="panel-calls" role="tabpanel"></div>
+    <div class="panel scroll" id="panel-patrols" role="tabpanel" hidden></div>
+    <div class="panel" id="panel-shift" role="tabpanel" hidden></div>
+    <div class="panel" id="panel-print" role="tabpanel" hidden><div class="pages" id="pages" aria-label="The printed forms, page by page"></div></div>
+    <div class="panel" id="panel-notes" role="tabpanel" hidden></div>
+  </section>
+
+  <div class="how">
+    <div class="card"><h3>Who to call, and when</h3><p>Everyone whose shift starts during the controller's, called about
+      an hour before they start, in time order - with the odd cases spotted: a name with no time, a venue with nobody
+      on it, a start after midnight.</p></div>
+    <div class="card"><h3>Three forms, one click</h3><p>The check call log, the campus patrol log and the shift log, written
+      as one PDF laid out like the paper forms - by the tool itself, no Word or Excel needed.</p></div>
+    <div class="card"><h3>In the desktop app as well</h3><p>Ticking a call turns the guard's name green on the roster,
+      a WhatsApp reader fills in who replied, the window hands over to the next controller 15 minutes early, and every
+      change can be undone. Those need Windows and a real roster, so they are not on this page.</p></div>
+  </div>
+  <footer>Everything shown is invented: Northwind Security, its controllers, guards and venues. The roster is rebuilt in
+    your browser so its newest week is always this week.</footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+"use strict";
+const CODE = ["tool/calllog.py", "tool/forms.py", "tool/xl.py", "tool/whatsapp.py", "tool/wa_bridge.py", "tool/wa_beta.py", "demo/make_demo.py"];
+const BINARY = ["demo/roster-template.xlsx"];
+const $ = (id) => document.getElementById(id);
+let py = null, bridge = null, urls = [], printed = null, drawn = null;
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+async function drawPrinted() {
+  const box = $("pages");
+  if (!printed || drawn === printed) return;
+  drawn = printed;
+  box.replaceChildren(el("p", { className: "empty", textContent: "Drawing the pages…" }));
+  try {
+    const doc = await pdfjsLib.getDocument({ data: printed.slice() }).promise;
+    const pages = [], dpr = window.devicePixelRatio || 1, room = Math.min(box.clientWidth || 900, 900) - 32;
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const css = room / page.getViewport({ scale: 1 }).width, vp = page.getViewport({ scale: css * dpr });
+      const c = el("canvas", { width: Math.floor(vp.width), height: Math.floor(vp.height) });
+      c.style.width = Math.floor(vp.width / dpr) + "px";
+      c.setAttribute("aria-label", "Page " + i + " of " + doc.numPages);
+      await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+      pages.push(c);
+    }
+    if (drawn === printed) box.replaceChildren(...pages);
+  } catch (e) {
+    console.error(e);
+    box.replaceChildren(el("p", { className: "empty", textContent: "The pages could not be drawn here - use the PDF buttons above." }));
+  }
+}
+
+function say(text, bad) { const s = $("status"); s.textContent = text; s.classList.toggle("bad", !!bad); }
+function el(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  Object.assign(e, props || {});
+  for (const k of kids) if (k != null) e.append(k);
+  return e;
+}
+function localISO(d) { return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+
+async function boot() {
+  try {
+    py = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/" });
+    say("Reading Check Call Log's code…");
+    py.FS.mkdirTree("/app/tool"); py.FS.mkdirTree("/app/demo");
+    for (const f of CODE) {
+      const r = await fetch("../" + f);
+      if (!r.ok) throw new Error(f + " could not be loaded (" + r.status + ")");
+      py.FS.writeFile("/app/" + f, await r.text());
+    }
+    for (const f of BINARY) {
+      const r = await fetch("../" + f);
+      if (!r.ok) throw new Error(f + " could not be loaded (" + r.status + ")");
+      py.FS.writeFile("/app/" + f, new Uint8Array(await r.arrayBuffer()));
+    }
+    const r = await fetch("demo.py");
+    py.FS.writeFile("/app/demo_bridge.py", await r.text());
+    say("Building the made-up roster…");
+    py.runPython("import sys; sys.path.insert(0, '/app'); import demo_bridge");
+    bridge = py.globals.get("demo_bridge");
+    $("date").value = localISO(new Date());
+    fillControllers(true);
+    $("go").disabled = false;
+    await make();
+  } catch (e) {
+    console.error(e);
+    say("The demo could not start: " + (e.message || e) + ". Try reloading the page.", true);
+  }
+}
+
+function fillControllers(pickNow) {
+  const sel = $("who"), keep = sel.value;
+  const people = JSON.parse(bridge.duty($("date").value));
+  sel.replaceChildren(...people.map(p => el("option", { value: p.name, textContent: p.name + "  (" + p.shift.replace(".", ":").replace(".", ":") + ")" })));
+  if (!people.length) { sel.append(el("option", { value: "", textContent: "Nobody on the roster that day" })); }
+  const hour = new Date().getHours();
+  const names = people.map(p => p.name);
+  if (!pickNow && names.includes(keep)) sel.value = keep;
+  else if (people.length) sel.value = (hour >= 6 && hour < 17 ? people[0] : people[people.length - 1]).name;
+  sel.disabled = !people.length;
+}
+
+function table(head, rows) {
+  const t = el("table");
+  t.append(el("thead", {}, el("tr", {}, ...head.map(h => el("th", { textContent: h[0], className: h[1] || "" })))));
+  const b = el("tbody");
+  for (const r of rows) b.append(r);
+  t.append(b);
+  return t;
+}
+
+function show(data) {
+  urls.forEach(u => URL.revokeObjectURL(u)); urls = [];
+  $("who-head").textContent = data.who;
+  $("when-line").textContent = data.date + "  ·  " + data.shift + (data.incoming ? "  ·  " + data.incoming + " takes over" : "");
+  const made = data.calls.filter(c => c.time && !c.ahead).length;
+  $("n-calls").textContent = made + " of " + data.calls.length;
+  $("n-patrols").textContent = data.patrols.length;
+  $("n-notes").textContent = data.notes.length;
+
+  const calls = data.calls.map(c => {
+    const tr = el("tr", { className: (c.ahead || !c.time ? "ahead" : "") + (c.strike ? " strike" : "") });
+    tr.append(el("td", { className: "num", textContent: c.no }), el("td", { className: "name", textContent: c.name }),
+      el("td", { textContent: c.venue }),
+      el("td", { className: "time" }, c.time ? c.time : el("span", { className: "due", textContent: "due " + c.due })),
+      el("td", {}, c.response ? el("span", { className: c.response === "Ok" ? "ok" : "", textContent: c.response }) : ""),
+      el("td", { className: "time", textContent: c.their }));
+    return tr;
+  });
+  $("panel-calls").replaceChildren(data.calls.length ? table([["No.", "num"], ["Employee name"], ["Venue"], ["Time of call"], ["Response"], ["Their shift"]], calls)
+    : el("p", { className: "empty", textContent: "Nobody needs a check call during this shift." }));
+
+  const rounds = data.patrols.map(p => el("tr", {}, el("td", { className: "time", textContent: p.start }), el("td", { className: "time", textContent: p.finish }),
+    el("td", { textContent: p.area }), el("td", { textContent: p.officer }), el("td", { textContent: p.notes })));
+  $("panel-patrols").replaceChildren(data.patrols.length ? table([["Start"], ["Finish"], ["Area"], ["Officer"], ["Notes"]], rounds)
+    : el("p", { className: "empty", textContent: "No patrol rounds yet on this shift." }));
+
+  const dl = el("dl", { className: "shiftlog" });
+  const entries = data.entries.length ? data.entries.map(e => Array.isArray(e) ? e.join("  ") : (e.time ? e.time + "  " : "") + (e.text || "")).join("\n") : data.quiet;
+  dl.append(el("dt", { textContent: "Log" }), el("dd", { textContent: entries || "—" }),
+    el("dt", { textContent: "Handover to" }), el("dd", { textContent: data.incoming || "—" }),
+    el("dt", { textContent: "Handover notes" }), el("dd", { textContent: data.handover || "—" }));
+  $("panel-shift").replaceChildren(dl);
+
+  $("panel-notes").replaceChildren(data.notes.length ? el("ul", { className: "notes" }, ...data.notes.map(n => el("li", { textContent: n })))
+    : el("p", { className: "empty", textContent: "Nothing on the roster needs a look." }));
+
+  for (const [id, key, type] of [["dl-all", "all", "application/pdf"], ["dl-calls", "calls_pdf", "application/pdf"],
+                                 ["dl-xlsx", "calls_xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]]) {
+    const path = data.files[key], a = $(id);
+    if (!path) { a.hidden = true; continue; }
+    const url = URL.createObjectURL(new Blob([py.FS.readFile(path)], { type }));
+    urls.push(url);
+    a.hidden = false; a.href = url; a.download = path.split("/").pop();
+    if (key === "all") { printed = py.FS.readFile(path); if (!$("panel-print").hidden) drawPrinted(); }
+  }
+  $("result").hidden = false;
+}
+
+async function make() {
+  if (!bridge) return;
+  const who = $("who").value;
+  if (!who) { say("Nobody sits in the control room on that day of the demo roster - pick another night."); return; }
+  $("go").disabled = true;
+  say("Making the logs…");
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const finished = document.querySelector("input[name=when]:checked").value === "done";
+    const data = JSON.parse(bridge.make($("date").value, who, finished));
+    if (data.error) { say(data.error, true); $("result").hidden = true; }
+    else { show(data); say("Made from the roster just now, in your browser."); }
+  } catch (e) {
+    console.error(e);
+    say("Something went wrong: " + (e.message || e), true);
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+for (const tab of document.querySelectorAll("[role=tab]")) {
+  tab.addEventListener("click", () => {
+    for (const t of document.querySelectorAll("[role=tab]")) {
+      const on = t === tab;
+      t.setAttribute("aria-selected", on);
+      $(t.getAttribute("aria-controls")).hidden = !on;
+    }
+    if (tab.id === "tab-print") drawPrinted();
+  });
+}
+$("date").addEventListener("change", () => { if (bridge) fillControllers(false); });
+$("controls").addEventListener("submit", (e) => { e.preventDefault(); make(); });
+boot();
+</script>
+</body>
+</html>

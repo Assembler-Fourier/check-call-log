@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "NORTHWIND check-call reader",
+  "version": "1.5.2",
+  "description": "Reads rostered chats locally. Prepares drafts and sends one reviewed message only when requested from Check Call Log.",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "background": {"service_worker": "worker.js"},
+  "content_scripts": [{
+    "matches": ["https://web.whatsapp.com/*"],
+    "js": ["reader.js", "drafts.js"],
+    "run_at": "document_idle"
+  }]
+}

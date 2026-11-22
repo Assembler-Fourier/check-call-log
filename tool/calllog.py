@@ -24,12 +24,15 @@ import random
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import urllib.request
 import zipfile
 
 import forms
+import whatsapp
 from xl import Book, idx_to_col
+
 
 def _config():
     """tool/config.json (optional, never committed): {"roster_id": "..."}."""
@@ -39,7 +42,6 @@ def _config():
     except (OSError, ValueError):
         return {}
 
-
 # ---- settings ---------------------------------------------------------------
 # The roster is a Google Sheet shared by link (view only). Its id comes from the ROSTER_SHEET_ID environment
 # variable or tool/config.json. With no id the tool runs in DEMO mode on the made-up roster in demo/.
@@ -47,17 +49,17 @@ ROSTER_ID = os.environ.get("ROSTER_SHEET_ID") or _config().get("roster_id", "")
 DEMO = not ROSTER_ID
 ROSTER_EXPORT = "https://docs.google.com/spreadsheets/d/%s/export?format=xlsx" % ROSTER_ID
 ROSTER_COLUMNS = "https://docs.google.com/spreadsheets/d/%s/export?format=csv&gid=0&range=%%s" % ROSTER_ID    # a few columns, text only
-CONTROLLERS = ["Lena Drayton", "Henry Marlow", "Soren Rasmussen", "Basil Jankowski"]   # offered in the window
+CONTROLLERS = ["Lena Drayton", "Henry Marlow", "Soren Rask", "Basil Janek"]   # offered in the window
 CONTROL_SITES = ("kilcarran", "kilcarran business campus")            # roster labels of the control room (controllers, not check calls)
 # The usual control-room week (Mon=0). Only used to decide who the window opens on before the
 # roster has loaded; the roster itself always decides whose shift a log is for.
 _DAYS, _EVES = ("06:00", "18:00"), ("16:30", "06:00")
 NORMAL_SHIFTS = {
-    0: (("Soren Rasmussen",) + _DAYS, ("Henry Marlow",) + _EVES),
-    1: (("Soren Rasmussen",) + _DAYS, ("Henry Marlow",) + _EVES),
-    2: (("Soren Rasmussen",) + _DAYS, ("Basil Jankowski",) + _EVES),
-    3: (("Soren Rasmussen",) + _DAYS, ("Basil Jankowski",) + _EVES),
-    4: (("Soren Rasmussen",) + _DAYS, ("Lena Drayton",) + _EVES),
+    0: (("Soren Rask",) + _DAYS, ("Henry Marlow",) + _EVES),
+    1: (("Soren Rask",) + _DAYS, ("Henry Marlow",) + _EVES),
+    2: (("Soren Rask",) + _DAYS, ("Basil Janek",) + _EVES),
+    3: (("Soren Rask",) + _DAYS, ("Basil Janek",) + _EVES),
+    4: (("Soren Rask",) + _DAYS, ("Lena Drayton",) + _EVES),
     5: (("Henry Marlow",) + _DAYS, ("Lena Drayton", "18:00", "06:00")),
     6: (("Henry Marlow",) + _DAYS, ("Lena Drayton", "18:00", "06:00")),
 }
@@ -197,7 +199,7 @@ def fetch_columns(first, last, rows):
     whether the shift on show has changed (about 5 KB). Read-only, like everything else here."""
     if DEMO:                                       # the demo roster only changes when it is rebuilt
         return "demo %r" % (roster_signature(),)
-    req =urllib.request.Request(ROSTER_COLUMNS % ("%s1:%s%d" % (first, last, rows)), headers={"User-Agent": "Mozilla/5.0"})
+    req = urllib.request.Request(ROSTER_COLUMNS % ("%s1:%s%d" % (first, last, rows)), headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=30) as r:
         if r.headers.get_content_type() != "text/csv":          # a sign-in page or Google's error page is no roster
             raise ValueError("Google did not send the roster's text (%s)" % r.headers.get_content_type())
@@ -368,7 +370,7 @@ class Roster:
                 warnings.append("%s: can't read %r as a time or a name - skipped, check it by hand" % (ref, v))
                 continue
             n_site, n_when, n_slot, moved = site, when, slot, ""
-            if above and when is None:                # (Carl Fielding on Sat 24 Oct: his name on the row of The lido label)
+            if above and when is None:                # (Carl Fielding on Sat 24 Oct: his name on the row of the Lido label)
                 n_site, n_when, n_slot = above[:3]
                 moved = "it is typed on the row of the venue label %s, so it has the start time straight above it (%s at %s)" % (above[3], n_when[0], n_site)
             if n_site is None or n_when is None:
@@ -451,11 +453,29 @@ def _dark(color):
     return max(rgb >> 16, (rgb >> 8) & 255, rgb & 255) < 0x40
 
 
+NEAR = 12                         # a fill within this many shades (of 255) on every channel of white, yellow or green
+                                  # IS that colour: Yusuf Eklund's cell was #fbfbfb (14 Nov) and was refused as "coloured"
+EVERYDAY = ("FFFFFF", "FFFF00", "92D050")
+
+
+def everyday_fill(rgb):
+    """'FBFBFB' (or 'FFFBFBFB', '#fbfbfb') -> 'FFFFFF'; a colour that is not near white, yellow or green -> None."""
+    hexes = str(rgb or "").lstrip("#").upper()[-6:]
+    if len(hexes) != 6 or any(ch not in "0123456789ABCDEF" for ch in hexes):
+        return None
+    have = [int(hexes[i:i + 2], 16) for i in (0, 2, 4)]
+    for name in EVERYDAY:
+        want = [int(name[i:i + 2], 16) for i in (0, 2, 4)]
+        if all(abs(a - b) <= NEAR for a, b in zip(have, want)):
+            return name
+    return None
+
+
 def fill_word(fill):
     """What a name's colour on the roster is worth a note for, or "": white, yellow (provisional) and green (confirmed)
     are the roster's everyday states - the Confirmed box turns names green - so only other colours are named."""
     plain = {None: "", "": "", "theme0": "", "FFFFFFFF": "", "FFFFFF00": "", "FF92D050": ""}
-    if str(fill).upper() in plain or fill in plain:
+    if str(fill).upper() in plain or fill in plain or everyday_fill(fill):
         return ""
     names = {"FF9900": "orange", "FFC000": "orange", "FF0000": "red", "C00000": "red", "666666": "grey", "999999": "grey",
              "808080": "grey", "BFBFBF": "grey", "00B0F0": "blue", "0070C0": "blue", "7030A0": "purple", "FF00FF": "pink"}
@@ -511,7 +531,12 @@ def usual_duty(date):
     return [{"name": n, "start": hhmm(a), "end": hhmm(b)} for n, a, b in NORMAL_SHIFTS[date.weekday()]]
 
 
-def at_the_desk(now, duty, fallback=True, newest=False):
+EARLY = 15                        # minutes before a shift starts that it already counts as the one to open (Lena 14 Nov:
+                                  # "we start a little early ... if i am pressing my name at 5:50 then it should open the
+                                  # coming shift"; and the handover moves to the next controller in those last 15 minutes)
+
+
+def at_the_desk(now, duty, fallback=True, newest=False, early=0):
     """Who is most likely making a log at this moment, and for which day's shift: (name, date).
 
     duty(date) lists that date's control-room shifts. Picks the controller who has been on longest
@@ -528,7 +553,7 @@ def at_the_desk(now, duty, fallback=True, newest=False):
         for s in duty(date):
             start = midnight + datetime.timedelta(minutes=s["start"])
             end = midnight + datetime.timedelta(minutes=s["end"] + (DAY if s["end"] <= s["start"] else 0))
-            if start <= now <= end + datetime.timedelta(minutes=0 if newest else GRACE):
+            if start - datetime.timedelta(minutes=early) <= now <= end + datetime.timedelta(minutes=0 if newest else GRACE):
                 live.append((start, s["name"], date))
             elif end < now:
                 ended.append((end, s["name"], date))
@@ -721,21 +746,41 @@ def build(date, roster, name=None, start=None, end=None, seed=None, now=None):
     file_name = re.sub(r'[\\/:*?"<>|]', "", name)
     stem = "%s %s" % (date.isoformat(), file_name)
     edits = load_edits(stem)
+    # Replies read from WhatsApp by the Chrome add-on (whatsapp.py). Empty unless the reader was live during this
+    # shift - and then a name waits for a real reply instead of being assumed Ok. A hand correction always wins.
+    # Auto read off (the window's choice, 20 Nov): the log is plain - generated Ok, no reply waiting, no hints. And
+    # only Lena's log ever carries replies ("all of the whatsapp is jsut for lena"), whatever files are lying about.
+    heard = whatsapp.load_heard(stem) if whatsapp.replies_for(name) else {}
+    trusted_now = whatsapp.trusted_names() if heard else set()
+    try:                                              # when the reader came on: calls before it keep the old Ok
+        reader_since = datetime.datetime.fromisoformat(heard["__shift__"]["since_at"]) if heard else datetime.datetime.min
+    except (KeyError, TypeError, ValueError):
+        reader_since = datetime.datetime.min
+    now = now or datetime.datetime.now()
     for c in calls:
         fix = edits.get(edit_key(c))                  # (only what has the right shape: a damaged file must not stop the log)
         c["fix"] = {k: v for k, v in fix.items() if isinstance(v, str) and (k != "time" or _clock_text(v))} if isinstance(fix, dict) else {}
+        c["heard"] = heard.get(edit_key(c), {}) if isinstance(heard.get(edit_key(c)), dict) else {}
         c["edited"] = bool(c["fix"])
         c["timed"] = bool(c["fix"].get("time"))       # the time was recorded or typed by hand, not generated
+        c["heard_time"] = False                       # ...or the guard's own displayed WhatsApp reply clock
+        c["time_source"] = "manual" if c["timed"] else "generated"
+        c["made_at"] = c["call"]                      # the generated time, before WhatsApp's time can move it
         if c["fix"].get("time"):
             typed = hhmm(c["fix"]["time"])
             c["call"] = next((t for t in (typed, typed + DAY) if ctrl_start <= t <= ctrl_end), typed + (DAY if typed < wrap else 0))
+        else:
+            # 8 Nov: the user explicitly chose the GUARD'S reply time, including genuine early replies.
+            # Legacy `time` is our question and `at` alone lacks date/source proof. Neither is converted here.
+            reply = actual_reply_minute(c["heard"], date, now)
+            if reply is not None:
+                c["call"], c["timed"], c["heard_time"], c["time_source"] = reply, True, True, "whatsapp_reply"
     calls.sort(key=lambda c: c["call"])
     # A call that has not happened yet is listed but left blank - unless the controller wants it otherwise: a time
     # he typed is always shown, and with the whole shift "filled in ahead" (fill_ahead) every call gets its time
     # and "Ok" as if the shift were over, to be corrected afterwards where it went differently.
     whole = edits.get(WHOLE_SHIFT)
     ahead = isinstance(whole, dict) and whole.get("ahead") == "yes"
-    now = now or datetime.datetime.now()
     midnight = datetime.datetime.combine(date, datetime.time())
     pending = 0
     for i, c in enumerate(calls, 1):
@@ -744,11 +789,37 @@ def build(date, roster, name=None, start=None, end=None, seed=None, now=None):
         c["due"] = fmt(c["start"] - LEAD)
         made = midnight + datetime.timedelta(minutes=c["call"]) <= now
         c["ahead"] = not made and (ahead or c["timed"])     # shown although the call is still to be made
+        c["default_response"] = RESPONSE
+        before_reader = midnight + datetime.timedelta(minutes=c.pop("made_at")) < reader_since
+        if made and heard and (c["heard"] or not before_reader):
+            # The reader is on this shift: Ok only once they have answered. A trusted senior is Ok without a message
+            # - but only if nothing was heard from him: "sick tonight, can't make it" must show, not turn green.
+            # (A call made before the reader came on keeps the old assumed Ok - but only if WhatsApp heard nothing
+            # about it: the add-on queues while the window is closed, so a refusal from before since_at still
+            # arrives, and must still show. A call only filled in ahead keeps the fill-ahead Ok.)
+            if c["heard"].get("response") != RESPONSE and not (whatsapp.trusted(c["name"], trusted_now) and not c["heard"]):
+                # With "Fill in the rest of the shift" on, a call that is only waiting (nothing heard, or asked with no
+                # answer) gets the usual Ok like any other (Lena 14 Nov: "it leaves the blanks ... because of the
+                # whatsapp thing"). Something he actually said - no, sick, late, a voice note, a yes taken back - stays
+                # blank for the controller to read.
+                # (20 Nov: "it should fill up all ... even if it has error or displayed as read reply" - with the shift
+                # filled in, EVERY call gets the usual Ok; a hand correction still wins.)
+                if not ahead:
+                    c["default_response"] = ""
         if made or c["ahead"]:
-            c["clock"], c["call_text"], c["response"] = c["call"] % DAY, fmt(c["call"]), fix.get("response", RESPONSE)
+            c["clock"], c["call_text"], c["response"] = c["call"] % DAY, fmt(c["call"]), fix.get("response", c["default_response"])
         else:
             c["clock"], c["call_text"], c["response"] = None, "", ""
             pending += 1
+    if heard:
+        made_calls = [c for c in calls if c["call_text"] and not c["ahead"]]
+        answered = sum(1 for c in made_calls if c["heard"].get("response") == RESPONSE)
+        look = sum(1 for c in made_calls if c["heard"].get("how") in ("voice", "media", "check", "other") and not c["response"])
+        waiting = sum(1 for c in made_calls if not c["response"])
+        trusted_ok = sum(1 for c in made_calls if whatsapp.trusted(c["name"], trusted_now) and not c["heard"])
+        note(7, "WhatsApp replies (reader on since %s): %d answered%s, %d still waiting for a reply%s"
+             % (heard.get("__shift__", {}).get("since", "?"), answered, ", %d trusted" % trusted_ok if trusted_ok else "",
+                waiting - look, ", %d to look at (voice note, photo or message)" % look if look else ""))
     early = sum(1 for c in calls if c["ahead"])
     if pending:
         note(7, "%d of the %d calls are still to come - their time and response are left blank to fill in by hand "
@@ -766,6 +837,27 @@ def build(date, roster, name=None, start=None, end=None, seed=None, now=None):
             "notes": notes, "before": before, "after": after}
 
 
+def actual_reply_minute(heard, date, now):
+    """A classified incoming reply's real local date/clock, as minutes from this roster day's midnight."""
+    if (heard.get("reply_source") not in ("bubble", "preview_clock")
+            or heard.get("direction_unknown") or heard.get("read_incomplete") or heard.get("attached_reaction")
+            or heard.get("shared_reply") or heard.get("text_truncated")
+            or heard.get("how") in ("asked", "reaction")):
+        return None
+    value = heard.get("reply_at")
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", value):
+        return None
+    try:
+        at = datetime.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    # Context belongs to heard(); do not reimpose a scheduled-mark/controller-start floor on actual evidence.
+    # Retain an overnight date offset, but never reinterpret a prior/remote day or a future clock as this call.
+    if at > now or not date <= at.date() <= date + datetime.timedelta(days=1):
+        return None
+    return int((at - datetime.datetime.combine(date, datetime.time())).total_seconds() // 60)
+
+
 def edit_key(call):
     """What identifies a row across rebuilds: the person, the venue and the shift, as the roster writes them."""
     return "%s|%s|%s" % (call["name"], call["site"], call["shift"])
@@ -780,10 +872,81 @@ def load_edits(stem):
     return saved if isinstance(saved, dict) else {}
 
 
+def _edit_problem(stem):
+    return Problem("Saved corrections for %s could not be read safely. The existing file was left unchanged." % stem)
+
+
+def _edits_for_write(stem):
+    """Display may tolerate damaged data; a new edit must never silently replace it with an empty file."""
+    try:
+        with open(os.path.join(EDITS, stem + ".json"), encoding="utf-8") as f:
+            saved = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, UnicodeError) as e:
+        raise _edit_problem(stem) from e
+    if not isinstance(saved, dict):
+        raise _edit_problem(stem)
+    return saved
+
+
+def _edit_bytes(stem, data):
+    """Replace one correction file atomically; undo across several files is still a sequence of replacements."""
+    path = os.path.join(EDITS, stem + ".json")
+    part = None
+    try:
+        if data is None:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            return
+        os.makedirs(EDITS, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="wb", prefix=".calllog-", suffix=".tmp", dir=EDITS, delete=False) as f:
+            part = f.name
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(part, path)
+    except OSError as e:
+        raise Problem("Could not save corrections for %s. The previous file was left unchanged: %s" % (stem, e)) from e
+    finally:
+        if part is not None:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+
+
+def _edit_json(stem, value):
+    try:
+        data = json.dumps(value, indent=1, ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as e:
+        raise Problem("Could not save corrections for %s. The previous file was left unchanged." % stem) from e
+    _edit_bytes(stem, data)
+
+
+def response_to_save(call, text):
+    """What to store when a response is typed: None puts the generated one back, anything else is kept.
+
+    Typing Ok used to mean "the generated Ok" and was stored as None. While the WhatsApp reader decides a call
+    (its default is blank until the guard answers), that put the blank straight back: Ok typed by hand did nothing
+    at all. So Ok is stored as Ok whenever the generated response is not Ok.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    if text.lower() == RESPONSE.lower():
+        return None if call.get("default_response", RESPONSE) == RESPONSE else RESPONSE
+    return text
+
+
 def save_edit(log, call, field, value):
     """Remember a hand correction for one row ('time' as H:MM, or 'response'); None forgets it."""
-    edits = load_edits(log["stem"])
+    edits = _edits_for_write(log["stem"])
     entry = edits.get(edit_key(call), {})
+    if not isinstance(entry, dict):
+        raise _edit_problem(log["stem"])
     if value is None:
         entry.pop(field, None)
     else:
@@ -796,13 +959,11 @@ def save_edit(log, call, field, value):
 
 
 def _keep_edits(stem, edits):
-    path = os.path.join(EDITS, stem + ".json")
+    _edits_for_write(stem)
     if edits:
-        os.makedirs(EDITS, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(edits, f, indent=1, ensure_ascii=False)
-    elif os.path.exists(path):
-        os.remove(path)
+        _edit_json(stem, edits)
+    else:
+        _edit_bytes(stem, None)
 
 
 def fill_ahead(log, on):
@@ -811,13 +972,13 @@ def fill_ahead(log, on):
     2026-10-11: sometimes the sheet is wanted complete before the shift ends, and what turns out different is
     corrected afterwards. It is the controller's choice for that one shift, kept with its other corrections."""
     if "calls" in log:
-        edits = load_edits(log["stem"])
+        edits = _edits_for_write(log["stem"])
         edits.pop(WHOLE_SHIFT, None)
         if on:
             edits[WHOLE_SHIFT] = {"ahead": "yes"}
         _keep_edits(log["stem"], edits)
     else:
-        store = _patrol_store(log)
+        store = _patrol_store(log, for_write=True)
         store["ahead"] = bool(on)
         _keep_patrol_store(log, store)
 
@@ -882,22 +1043,17 @@ def snapshot(stems):
         try:
             with open(os.path.join(EDITS, stem + ".json"), "rb") as f:
                 held[stem] = f.read()
-        except OSError:
+        except FileNotFoundError:
             held[stem] = None
+        except OSError as e:
+            raise _edit_problem(stem) from e
     return held
 
 
 def restore(held):
     """Put a snapshot back exactly: this is all that undo and redo are."""
     for stem, data in held.items():
-        path = os.path.join(EDITS, stem + ".json")
-        if data is None:
-            if os.path.exists(path):
-                os.remove(path)
-        else:
-            os.makedirs(EDITS, exist_ok=True)
-            with open(path, "wb") as f:
-                f.write(data)
+        _edit_bytes(stem, data)
 
 
 def desk_shift(date, roster, name=None, start=None, end=None):
@@ -976,12 +1132,32 @@ def _clock_text(text):
     return bool(m) and int(m.group(1)) <= 23 and int(m.group(2)) <= 59
 
 
-def _patrol_store(log):
+def _patrol_store(log, for_write=False):
     """What has been changed by hand on a patrol log: rounds altered, rounds taken out, patrols added, or all cleared.
     Only what has the right shape is kept, so a damaged file can never stop the log being made."""
-    raw = load_edits(log["stem"])
+    raw = _edits_for_write(log["stem"]) if for_write else load_edits(log["stem"])
     if isinstance(raw.get("rows"), list) and "added" not in raw:   # the first format: a plain list that stood in place of the usual rounds
-        raw = {"blank": True, "added": [dict(r, id="a%d" % n, finish_by="hand") for n, r in enumerate(raw["rows"], 1) if isinstance(r, dict)]}
+        if for_write and not all(isinstance(r, dict) for r in raw["rows"]):
+            raise _edit_problem(log["stem"])
+        raw = dict(raw, blank=True, added=[dict(r, id="a%d" % n, finish_by="hand") for n, r in enumerate(raw["rows"], 1) if isinstance(r, dict)])
+        raw.pop("rows", None)
+    if for_write:
+        for key, kind in (("changed", dict), ("removed", list), ("added", list), ("blank", bool), ("ahead", bool)):
+            if key in raw and not isinstance(raw[key], kind):
+                raise _edit_problem(log["stem"])
+        changed, added = raw.get("changed", {}), raw.get("added", [])
+        valid_fix = lambda r: isinstance(r, dict) and all(
+            k not in r or (isinstance(r[k], str) and (k not in ("start", "finish") or _clock_text(r[k])))
+            for k in ("start", "finish", "area", "notes", "finish_by"))
+        if (not all(isinstance(k, str) and valid_fix(v) for k, v in changed.items())
+                or not all(valid_fix(r) and isinstance(r.get("id"), str)
+                           and _clock_text(r.get("start")) and _clock_text(r.get("finish")) for r in added)
+                or not all(isinstance(v, str) for v in raw.get("removed", []))
+                or ("rows" in raw and not isinstance(raw["rows"], list))):
+            raise _edit_problem(log["stem"])
+        # Retain fields not interpreted by this version, rather than stripping them during an unrelated edit.
+        return dict(raw, changed=changed, added=added, removed=raw.get("removed", []),
+                    blank=raw.get("blank", False), ahead=raw.get("ahead", False))
     of = lambda key, kind: raw[key] if isinstance(raw.get(key), kind) else kind()
     changed = {}
     for row_id, fix in of("changed", dict).items():
@@ -995,14 +1171,12 @@ def _patrol_store(log):
 
 
 def _keep_patrol_store(log, store):
-    path = os.path.join(EDITS, log["stem"] + ".json")
-    if not (store["changed"] or store["removed"] or store["added"] or store["blank"] or store.get("ahead")):
-        if os.path.exists(path):
-            os.remove(path)
+    _edits_for_write(log["stem"])
+    extras = set(store) - {"changed", "removed", "added", "blank", "ahead"}
+    if not (store["changed"] or store["removed"] or store["added"] or store["blank"] or store.get("ahead") or extras):
+        _edit_bytes(log["stem"], None)
         return
-    os.makedirs(EDITS, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(store, f, indent=1, ensure_ascii=False)
+    _edit_json(log["stem"], store)
 
 
 def build_patrols(date, roster, name=None, start=None, end=None, now=None):
@@ -1051,7 +1225,7 @@ def build_patrols(date, roster, name=None, start=None, end=None, now=None):
 
 def patrol_set(log, row_id, **fields):
     """Change one patrol: any of start / finish (as HH:MM), area, notes."""
-    store = _patrol_store(log)
+    store = _patrol_store(log, for_write=True)
     if row_id.startswith("u"):
         store["changed"].setdefault(row_id, {}).update(fields)
     else:
@@ -1063,7 +1237,7 @@ def patrol_set(log, row_id, **fields):
 
 def patrol_add(log, start, finish, area="All", notes=""):
     """Add a patrol (times as HH:MM); returns its id."""
-    store = _patrol_store(log)
+    store = _patrol_store(log, for_write=True)
     new = "a%d" % (max([int(r["id"][1:]) for r in store["added"] if r["id"][1:].isdigit()] + [0]) + 1)
     store["added"].append({"id": new, "start": start, "finish": finish, "area": area, "notes": notes})
     _keep_patrol_store(log, store)
@@ -1072,7 +1246,7 @@ def patrol_add(log, start, finish, area="All", notes=""):
 
 def patrol_remove(log, ids):
     """Take patrols out: a usual round is remembered as removed, an added patrol is simply dropped."""
-    store = _patrol_store(log)
+    store = _patrol_store(log, for_write=True)
     for row_id in ids:
         if row_id.startswith("u"):
             store["changed"].pop(row_id, None)
@@ -1084,12 +1258,16 @@ def patrol_remove(log, ids):
 
 def patrol_clear(log):
     """No patrols at all: the form prints blank to write on."""
-    _keep_patrol_store(log, {"changed": {}, "removed": [], "added": [], "blank": True, "ahead": _patrol_store(log)["ahead"]})
+    store = _patrol_store(log, for_write=True)
+    store.update(changed={}, removed=[], added=[], blank=True)
+    _keep_patrol_store(log, store)
 
 
 def patrol_reset(log):
     """Forget every change: back to the usual rounds."""
-    _keep_patrol_store(log, {"changed": {}, "removed": [], "added": [], "blank": False, "ahead": _patrol_store(log)["ahead"]})
+    store = _patrol_store(log, for_write=True)
+    store.update(changed={}, removed=[], added=[], blank=False)
+    _keep_patrol_store(log, store)
 
 
 def patrol_slot(log, now=None):
@@ -1177,18 +1355,21 @@ def build_shift(date, roster, name=None, start=None, end=None):
 
 def save_shift(log, entries, handover="", supervisor="", incoming=""):
     """Keep what was typed on a Shift Log. With nothing typed at all the file is removed."""
-    path = os.path.join(EDITS, log["stem"] + ".json")
-    data = {"entries": [{"id": e["id"], "time": e["time"], "area": e["area"], "text": e["text"]} for e in entries],
-            "handover": handover.strip(), "supervisor": supervisor.strip()}
+    raw = _edits_for_write(log["stem"])
+    if (not isinstance(raw.get("entries", []), list)
+            or not all(isinstance(e, dict) and all(k not in e or isinstance(e[k], str)
+                                                 for k in ("id", "time", "area", "text")) for e in raw.get("entries", []))
+            or not all(k not in raw or isinstance(raw[k], str) for k in ("handover", "supervisor", "incoming"))):
+        raise _edit_problem(log["stem"])
+    extras = {k: v for k, v in raw.items() if k not in ("entries", "handover", "supervisor", "incoming")}
+    data = dict(extras, entries=[{"id": e["id"], "time": e["time"], "area": e["area"], "text": e["text"]} for e in entries],
+                handover=handover.strip(), supervisor=supervisor.strip())
     if incoming.strip() != log.get("incoming_roster", ""):    # only a name changed by hand is kept; else the roster decides
         data["incoming"] = incoming.strip()
-    if not any(data.values()) and "incoming" not in data:
-        if os.path.exists(path):
-            os.remove(path)
+    if not any(data.values()) and "incoming" not in data and not extras:
+        _edit_bytes(log["stem"], None)
         return
-    os.makedirs(EDITS, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=1, ensure_ascii=False)
+    _edit_json(log["stem"], data)
 
 
 def new_entry_id(log):

@@ -36,7 +36,7 @@ good = ["https://script.google.com/macros/s/AKfycbz1RTx-abc_DEF123/exec",
 bad = ["http://script.google.com/macros/s/AKfycbz/exec", "https://script.google.com/macros/s/AKfycbz/dev",
        "https://script.google.com.evil.example/macros/s/AKfycbz/exec", "https://evil.example/script.google.com/macros/s/x/exec",
        "https://script.google.com/macros/s/AKfycbz/exec?x=1", " https://script.google.com/macros/s/AKfycbz/exec",
-       "https://script.google.com/macros/s//exec", "https://docs.google.com/spreadsheets/d/1DemoRosterSheetIdNotARealOne_0123456789abcd/edit",
+       "https://script.google.com/macros/s//exec", "https://docs.google.com/spreadsheets/d/1NwDemoRosterSheetIdNotARealOne0000000000000/edit",
        "script.google.com/macros/s/AKfycbz/exec", "", "https://script.google.com/macros/s/AK fy/exec"]
 check("a web app link from Apps Script is taken (also a Workspace one)", all(rc.URL_RE.match(u) for u in good))
 check("nothing else is: http, /dev, look-alike hosts, extra bits, the roster's own link", not any(rc.URL_RE.match(u) for u in bad),
@@ -74,7 +74,10 @@ check("two keys made are never the same", len({__import__("secrets").token_urlsa
 
 # ---- colours as the roster copy gives them ----
 check("green is recognised however it is written", all(rc.is_green(f) for f in ("FF92D050", "ff92d050", "#92d050", "92D050")) and
-      not any(rc.is_green(f) for f in (None, "", "theme0", "FFFFFF00", "FF92D051", "#92d05")))
+      not any(rc.is_green(f) for f in (None, "", "theme0", "FFFFFF00", "FFA0D050", "#92d05")))
+check("14 Nov: a few shades off is the same colour (FF92D051 is green, FFFBFBFB white); further off is not",
+      rc.is_green("FF92D051") and rc.css("FFFBFBFB") == "#ffffff" and rc.changeable("FFFBFBFB")
+      and rc.css("FFD9D9D9") == "#d9d9d9" and not rc.changeable("FFD9D9D9") and not rc.changeable("FFFFF2CC"))
 check("colours read as the script sees them", [rc.css(f) for f in (None, "theme0", "FFFFFFFF", "FFFFFF00", "FF92D050", "FFFF9900", "theme5", "nonsense")] ==
       ["#ffffff", "#ffffff", "#ffffff", "#ffff00", "#92d050", "#ff9900", "", ""])
 check("only white, yellow and green names may be changed", [rc.changeable(f) for f in (None, "theme0", "FFFFFFFF", "FFFFFF00", "FF92D050", "FFFF9900", "FFFF0000", "FF666666", "FF000000", "theme5")] ==

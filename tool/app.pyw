@@ -3,12 +3,12 @@
 It opens on the shift that is at the desk and shows its three logs at once (there is no "make" button: building them
 takes 2 ms). The top line says whose shift it is; "Change" brings out the chooser. Under it the shift is drawn as one
 line of time. Then the three forms as tabs: a table you type in on the left, the page as it will print on the right.
-Everything typed is saved at once and can be undone; nothing asks "are you sure?", nothing pops up, nothing makes a
-sound. Looking at a shift never writes a file: its files are written when something on it is changed and whenever a
+Everything typed in a log is saved at once and can be undone. WhatsApp beta has optional new-reply sounds and
+user-triggered chat/draft opening; the person presses Send in WhatsApp. Looking at a shift never writes a log file: its files are written when something on it is changed and whenever a
 button that leads to them is pressed.
 
 The rules for the logs are calllog.py's, the printed forms are forms.py's; the look is skin.py's, the table grid.py's,
-the other parts widgets.py's. This file is only how they are put together. It starts no other program.
+the other parts widgets.py's and wa_ui.py's. This file is how they are put together.
 """
 import datetime
 import json
@@ -28,21 +28,25 @@ import calllog  # noqa: E402
 import forms  # noqa: E402
 import rostercolour  # noqa: E402
 import skin as skinlib  # noqa: E402
+import whatsapp  # noqa: E402
+import wa_ui  # noqa: E402
 from grid import Grid  # noqa: E402
 from widgets import Button, Calendar, Chip, Field, Notice, Panel, Preview, Ribbon, Tab  # noqa: E402
 
 SETTINGS = os.path.join(calllog.CACHE, "settings.json")
 ICON = os.path.join(HERE, "app.ico")
-VERSION = "6.8"
+VERSION = "6.30"
 ROSTER_FRESH = 300                # seconds a downloaded roster is reused before fetching it again
 WATCH = 30                        # seconds between the small checks of the shift on show (the roster's own columns)
 WATCH_FULL = 6                    # ...and every so many checks the whole roster is read again, for colours
+WA_EVERY = 15                     # seconds between looks at what the WhatsApp reader has reported
 FORMS = (("calls", "Check calls"), ("patrols", "Patrols"), ("shift", "Shift log"))
 RESPONSES = ["Ok", "No answer", "Left message"]    # offered under a response being typed; only Ok means confirmed (green)
 CALL_COLUMNS = [dict(field="no", title="No.", width=44, align="e", tone="ink3"), dict(field="ok", title="Green", width=56, align="center", press=True, give=True),
-                dict(field="name", title="Employee name", width=170, grow=3),
-                dict(field="venue", title="Venue", width=150, grow=3, tone="ink2"), dict(field="time", title="Time of call", width=104, align="e", edit=True),
-                dict(field="resp", title="Response", width=130, grow=2, edit=True, choices=RESPONSES), dict(field="shift", title="Their shift", width=110, tone="ink3")]
+                dict(field="name", title="Employee name", width=170, grow=2),
+                dict(field="venue", title="Venue", width=150, grow=2, tone="ink2"), dict(field="time", title="Time of call", width=104, align="e", edit=True),
+                # (the widest share of spare room: with the WhatsApp reader on, it carries the guard's own words)
+                dict(field="resp", title="Response", width=130, grow=4, edit=True, choices=RESPONSES), dict(field="shift", title="Their shift", width=110, tone="ink3")]
 PATROL_COLUMNS = [dict(field="no", title="No.", width=44, align="e", tone="ink3"), dict(field="officer", title="Officer", width=150, grow=1, tone="ink2"),
                   dict(field="area", title="Campus / area", width=140, grow=1, edit=True), dict(field="start", title="Start", width=92, align="e", edit=True),
                   dict(field="finish", title="Finish", width=92, align="e", edit=True), dict(field="notes", title="Notes / incidents", width=180, grow=3, edit=True)]
@@ -87,7 +91,7 @@ class App:
         self.settings = load_settings()
 
         # open on whoever is at the desk, by the usual week; corrected from the roster once it has been read
-        self.name, first_day = calllog.at_the_desk(datetime.datetime.now(), calllog.usual_duty, newest=True)
+        self.name, first_day = calllog.at_the_desk(datetime.datetime.now(), calllog.usual_duty, newest=True, early=calllog.EARLY)
         self.dates = [first_day]
         self.packs, self.day = [], 0                  # one pack per chosen day: {"date", "calls", "patrols", "shift", "problems"}; the one on show
         self.files = {}                               # (date, controller) -> {"paths", "problems", "at"}: what has been written
@@ -102,15 +106,18 @@ class App:
         self.page_forced = False                      # the printed page was asked for while the chooser is out and the window is narrow
         self.fresh = None                             # a shift log line just added that nothing has been typed in yet
         self.extras_job, self.filling = None, False
+        self.aim_job = None
         self.said, self.said_kind = "", "word"        # what was done last (kept on show until the next thing)
         self.notes_all = False                        # every note on show, not just the first three
         self.stages, self.ended = {}, None            # how each shift on show stood at the last minute; one just finished
         # Confirmed: names turned green (or back) on the roster from here, until a fresh roster copy shows it; and
         # those being sent now. Both keyed by (roster cell, name).
         self.link, self.pending, self.sending, self.reread_job, self.link_box = None, {}, {}, None, None
+        self.stamp_wait = {}                          # names turned green by hand, Auto green off: the click's minute (21 Nov)
         # Auto green (a toggle at the top), on or off per controller (auto_for, below): with it on, the roster
         # follows the response. hand: Green-box decisions per shift {stem: {edit key: "green"/"white"}}, kept in a file
-        # with the shift (they decide for that name until its response changes); tried: (stem, edit key) -> when.
+        # with the shift (they decide for that name until its response changes); tried: (stem, edit key) -> when,
+        # tried_target: the colour asked for then. A changed response must not wait for the old target's retry timer.
         # Auto green is on or off for each controller's own shifts (asked for on 2026-10-24): on for Lena Drayton and off
         # for everyone else until they switch their own (a setting kept from 6.6, "auto_green": a name, is carried over).
         chosen = self.settings.get("auto_green_for")
@@ -120,6 +127,7 @@ class App:
         self.auto_for = {n for n in chosen if isinstance(n, str) and n}
         self.desk_was, self.handed = None, None       # who was at the desk at the last minute; a handover just made
         self.hand, self.tried, self.auto_busy, self.auto_job, self.link_warned = {}, {}, False, None, False
+        self.tried_target = {}
         self.view_fresh = False                       # the roster on show was read fresh (not the saved copy at start-up)
         self.quiet_until, self.quiet_step, self.quiet_since = 0.0, 0, None    # back-off while Google refuses
         self.fetching = self.fetch_again = False      # one roster read at a time; another asked for meanwhile: once more
@@ -139,18 +147,23 @@ class App:
         root.geometry("%dx%d" % (wide, tall))
         root.minsize(min(px(980), wide), min(px(660), tall))
         self.other, self.supervisor, self.incoming = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        whatsapp.set_replies(False)                   # Auto read starts off each session: the log starts plain (20 Nov)
+        self.beta = wa_ui.BetaUI(self, now=lambda: datetime.datetime.now())
         self.build()
         self.other.trace_add("write", self.other_typed)
         for var in (self.supervisor, self.incoming):
             var.trace_add("write", self.extras_typed)
 
         keys = {"<Control-Key-1>": lambda: self.show_tab("calls"), "<Control-Key-2>": lambda: self.show_tab("patrols"), "<Control-Key-3>": lambda: self.show_tab("shift"),
-                "<Control-p>": self.open_all, "<Control-n>": self.add_row, "<Control-z>": self.undo, "<Control-y>": self.redo, "<F5>": lambda: self.load_roster(force=True),
+                "<Control-p>": self.open_all, "<Control-n>": self.add_row,
+                "<Control-z>": lambda: self.beta.edit_history(False) if self.beta.opened else self.undo(),
+                "<Control-y>": lambda: self.beta.edit_history(True) if self.beta.opened else self.redo(), "<F5>": lambda: self.load_roster(force=True),
                 "<F8>": self.toggle_preview, "<Control-l>": self.toggle_chooser, "<Control-d>": lambda: root.after(1, self.switch_theme),
                 "<Control-g>": self.confirm_picked}
         for sequence, action in keys.items():
             root.bind(sequence, lambda e, action=action: action() or "break")
-        root.bind("<Escape>", lambda e: self.toggle_chooser() if self.choosing else None)
+        root.bind("<Escape>", lambda e: self.beta.hide() if self.beta.opened else self.toggle_chooser() if self.choosing else None)
+        root.bind("<Control-f>", lambda e: self.beta.focus_search())
         root.bind("<Configure>", self.resized, add="+")
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.poll_job = root.after(120, self.poll)
@@ -159,6 +172,21 @@ class App:
         self.load_roster()
         self.watch_job = root.after(WATCH * 1000, self.watch)
         self.script_job = root.after(5000, self.check_script)      # which version of its script the roster runs
+        # WhatsApp replies from the Chrome add-on (whatsapp.py): a receiver on 127.0.0.1 in a thread of this window,
+        # and a look every WA_EVERY seconds. Never in an automated check unless it asks (CCL_WA).
+        self.wa_server, self.wa_live, self.wa_job, self.wa_said, self.wa_purged = None, None, None, "", 0.0
+        self.wa_receiver_elsewhere = False             # cached authenticated ownership; no fast UI network polling
+        if not os.environ.get("CCL_NO_DOWNLOAD") or os.environ.get("CCL_WA"):
+            try:                                      # the reader is extra: nothing in it may stop the window opening
+                whatsapp.purge()                      # (staff's messages go after a week, feature on or off)
+                self.wa_purged = time.time()
+                if whatsapp.settings()["controllers"]:
+                    self.wa_server = whatsapp.start()
+                    self.wa_receiver_elsewhere = self.wa_server is None and whatsapp.ping()
+            except Exception:
+                self.wa_server = None
+                self.wa_receiver_elsewhere = False
+            self.wa_job = root.after(WA_EVERY * 1000, self.wa_watch)
         # the rest is for automated checks of the window
         if os.environ.get("CCL_GEOMETRY"):
             root.geometry(os.environ["CCL_GEOMETRY"])
@@ -181,6 +209,8 @@ class App:
         """Make every widget, in the look in use now. Run once at the start and again when the look is changed: all
         the window knows is kept on the App itself, so the new widgets show exactly what the old ones did."""
         root, skin, px = self.root, self.skin, self.skin.px
+        if not self.beta.before_rebuild():
+            return
         month = (self.cal.year, self.cal.month) if hasattr(self, "cal") else None
         for w in root.winfo_children():
             w.destroy()
@@ -212,6 +242,8 @@ class App:
         self.today_label = tk.Label(head, font=skin.font("caption"), bg=skin["base"], fg=skin["ink3"])      # (packed last: the first to give way in a narrow window)
         self.today_label.pack(side="right", padx=(0, px(12)))
 
+        self.beta.build_banner(root)
+
         # ---- the strip at the bottom: the roster ----
         foot = tk.Frame(root, bg=skin["sunk"])
         foot.pack(side="bottom", fill="x")
@@ -220,10 +252,11 @@ class App:
         self.buttons["refresh"] = Button(foot, skin, "Read the roster again", lambda: self.load_roster(force=True), icon="refresh", kind="quiet", keys="F5",
                                          back="sunk", height=24)
         self.buttons["refresh"].pack(side="right", padx=(0, px(4)), pady=px(1))
-        tk.Label(foot, text="Type in a cell: Enter moves on, Esc puts it back.  Ctrl+Z undoes anything.", font=skin.font("caption"),
-                 bg=skin["sunk"], fg=skin["ink3"]).pack(side="left", padx=px(16))
+        self.help_label = tk.Label(foot, text="Type in a cell: Enter moves on, Esc puts it back. Ctrl+Z undoes log edits.", font=skin.font("caption"),
+                                   bg=skin["sunk"], fg=skin["ink3"])
+        self.help_label.pack(side="left", padx=px(16))
 
-        body = tk.Frame(root, bg=skin["base"])
+        body = self.body = tk.Frame(root, bg=skin["base"])
         body.pack(fill="both", expand=True, padx=px(16), pady=(0, px(10)))
         self.chooser = Panel(body, skin)              # packed on the left only while it is wanted
         self.build_chooser(self.chooser.inner)
@@ -233,7 +266,7 @@ class App:
         main.pack(side="right", fill="both", expand=True)
 
         # ---- the shift as one line of time, and the way to the paper ----
-        top = Panel(main, skin)
+        top = self.summary_panel = Panel(main, skin)
         top.pack(fill="x")
         top.configure(height=px(124))
         self.ribbon = Ribbon(top.inner, skin, self.go_to)
@@ -244,10 +277,15 @@ class App:
         self.buttons["print"].pack(side="right")
         self.buttons["folder"] = Button(row, skin, "Folder", self.open_folder, icon="folder", kind="plain")
         self.buttons["folder"].pack(side="right", padx=(0, px(4)))
-        self.files_label = tk.Label(row, font=skin.font("caption"), bg=skin["panel"], fg=skin["ink3"])
-        self.files_label.pack(side="right", padx=(0, px(12)))
-        self.tally = tk.Label(row, font=skin.font("body"), bg=skin["panel"], fg=skin["ink"], anchor="w")
-        self.tally.pack(side="left", fill="x", expand=True)
+        self.file_status = tk.Frame(row, bg=skin["panel"])
+        self.file_status.pack(side="left", fill="x", expand=True, padx=(0, px(12)))
+        self.file_status.columnconfigure(0, weight=1)
+        self.tally = tk.Label(self.file_status, font=skin.font("body"), bg=skin["panel"], fg=skin["ink"], anchor="w")
+        self.tally.grid(row=0, column=0, sticky="w")
+        self.files_label = tk.Label(self.file_status, font=skin.font("caption"), bg=skin["panel"], fg=skin["ink3"], anchor="w")
+        self.files_label.grid(row=0, column=1, sticky="w", padx=(px(12), 0))
+        self.status_stacked = False
+        self.file_status.bind("<Configure>", lambda e: self.fit_file_status())
 
         # ---- the three forms ----
         strip = tk.Frame(main, bg=skin["base"])
@@ -302,9 +340,10 @@ class App:
             return frame
 
         marks = (("check", "confirm_edge", "green: confirmed (Ctrl+G)"), ("dot", "ink3", "typed by hand"), ("ring", "accent", "ahead of the clock"))
-        frame = page("calls", (("fill", "Fill in the rest of the shift", "fill", self.fill_ahead, ""),), marks)
+        frame = page("calls", (("fill", "Fill in the rest of the shift", "fill", self.fill_ahead, ""),
+                               ("whatsapp", "WhatsApp", "phone", self.whatsapp_picked, "")), marks)
         self.grids["calls"] = Grid(frame, skin, CALL_COLUMNS, self.call_text, self.commit_call, enter="down", busy=busy, status=say, gutter=34,
-                                   press=self.press_call, moved=self.call_moved)
+                                   press=self.press_call, moved=self.call_moved, pointed=self.call_pointed)
         self.grids["calls"].pack(fill="both", expand=True, padx=(px(4), px(2)), pady=(0, px(4)))
         frame = page("patrols", (("add_patrol", "Add a patrol", "add", self.add_patrol, "Ctrl+N"), ("remove_patrol", "Remove", "remove", self.remove_patrol, ""),
                                  ("clear_patrols", "Clear all", "clear", self.clear_patrols, ""), ("usual", "Usual rounds", "rounds", self.usual_rounds, "")), marks)
@@ -339,6 +378,8 @@ class App:
         self.notes.pack(fill="x", pady=(px(6), 0))
         self.note_lines = []
 
+        self.beta.build_workspace(root)
+
         self.show_clock()
         self.show_chooser()
         self.refresh()
@@ -366,7 +407,8 @@ class App:
         self.shift_chips = []
         self.cal = Calendar(inner, skin, self.set_dates, self.shift_kind)
         self.cal.pack(fill="x", padx=px(10), pady=(px(8), 0))
-        tk.Label(inner, text="Ctrl+click adds another day to print together.", font=skin.font("caption"), bg=skin["panel"], fg=skin["ink3"], anchor="w").pack(
+        tk.Label(inner, text="Calendar: arrows move; Enter selects; Ctrl+Enter or Ctrl+click adds a day.", font=skin.font("caption"),
+                 bg=skin["panel"], fg=skin["ink3"], anchor="w", justify="left", wraplength=px(280)).pack(
             fill="x", padx=px(14))
         self.buttons["done"] = Button(inner, skin, "Done", self.toggle_chooser, icon="check", kind="plain", keys="Esc")
         self.buttons["done"].pack(side="bottom", anchor="e", padx=px(10), pady=px(8))
@@ -397,7 +439,7 @@ class App:
 
     def switch_theme(self):
         """Dark for the night, light for the day: the window is made again as it stands and the choice is remembered."""
-        if not self.settle():
+        if not self.settle() or not self.beta.before_rebuild():
             return
         self.skin.use("light" if self.skin.theme == "dark" else "dark")
         self.build()
@@ -445,7 +487,8 @@ class App:
         return False
 
     def recent_shifts(self, limit=5):
-        """This controller's latest shifts that have started, newest first, as (date, on now?, hours)."""
+        """This controller's latest shifts that have started (or start within calllog.EARLY minutes: a click on his
+        name at 17:50 opens the 18:00 shift, not yesterday's), newest first, as (date, on now?, hours)."""
         now, out = datetime.datetime.now(), []
         for back in range(35):
             d = now.date() - datetime.timedelta(days=back)
@@ -453,7 +496,7 @@ class App:
             for s in self.duty(d):
                 start = midnight + datetime.timedelta(minutes=s["start"])
                 end = midnight + datetime.timedelta(minutes=s["end"] + (calllog.DAY if s["end"] <= s["start"] else 0))
-                if calllog.same_person(self.name, s["name"]) and start <= now:
+                if calllog.same_person(self.name, s["name"]) and start - datetime.timedelta(minutes=calllog.EARLY) <= now:
                     out.append((d, now <= end, "%s-%s" % (calllog.fmt(s["start"]).zfill(5), calllog.fmt(s["end"]).zfill(5))))
                     break
             if len(out) == limit:
@@ -467,7 +510,7 @@ class App:
         day's log, and not while something is being typed (the next minute does it)."""
         if self.view is None:
             return
-        desk, last = calllog.at_the_desk(datetime.datetime.now(), self.duty, fallback=False, newest=True), self.desk_was
+        desk, last = calllog.at_the_desk(datetime.datetime.now(), self.duty, fallback=False, newest=True, early=calllog.EARLY), self.desk_was
         if desk == last:
             return
         pack = self.pack
@@ -477,11 +520,11 @@ class App:
                 return                                # (tried again at the next minute)
             if not self.flush():
                 return
-            self.handed = (pack["date"], meta["supervisor"], desk[0], datetime.datetime.now().strftime("%H:%M"))
+            # 20 Nov (Lena): "remove this line just auto change the person 15 minutes before the shift starts no
+            # need to remind or do anything" - the outgoing logs are still written (flush above), silently.
             self.name, self.dates, self.touched_name, self.touched_date, self.day = desk[0], [desk[1]], False, False, 0
             self.rebuild()
             self.fill_extras()
-            self.say("Handover at %s: %s has come on - this is their shift now." % (self.handed[3], desk[0]))
         self.desk_was = desk
 
     def print_handed(self):
@@ -490,7 +533,8 @@ class App:
         state = self.files.get((date, who))
         path = state["paths"].get("all") if state else None
         if path:
-            self.launch(path)
+            if self.launch(path) is False:
+                return
             self.say("Opened %s's logs to print." % who)
         else:
             self.say("%s's logs have no file to print yet - choose their shift and press Open all to print." % who, "check")
@@ -500,15 +544,13 @@ class App:
     def follow_the_desk(self):
         """Until someone has chosen otherwise: the controller at the desk now, and their shift's day."""
         if not self.touched_name:
-            who = calllog.at_the_desk(datetime.datetime.now(), self.duty, fallback=self.view is None, newest=True)
+            who = calllog.at_the_desk(datetime.datetime.now(), self.duty, fallback=self.view is None, newest=True, early=calllog.EARLY)
             if who:
                 self.name = who[0]
                 if not self.touched_date:
                     self.dates = [who[1]]
         elif not self.touched_date:
-            recent = self.recent_shifts(1)
-            if recent:
-                self.dates = [recent[0][0]]
+            self.dates = [self.shift_to_open()]
 
     def set_name(self, name, typed=False):
         if not self.settle():
@@ -516,16 +558,38 @@ class App:
         self.name, self.touched_name = name, True
         if not typed and self.other.get():
             self.other.set("")
-        if not self.touched_date:                     # follow the controller to their latest shift
-            recent = self.recent_shifts(1)
-            self.dates = [recent[0][0] if recent else datetime.date.today()]
+        if not self.touched_date:                     # that person's shift on now, else today, else the next one
+            self.dates = [self.shift_to_open()]
         self.select()
+
+    def shift_to_open(self, name=None):
+        """The shift a click on a controller's name opens (Lena, 20 Nov): the one on now (or starting within
+        calllog.EARLY minutes - a night still running after midnight counts); else his shift today, even one already
+        over; else his NEXT shift ("click on henry ... open up henry tomorrow saturday shift"); else his latest."""
+        name = name or self.name
+        now = datetime.datetime.now()
+        for back in (1, 0):
+            d = now.date() - datetime.timedelta(days=back)
+            midnight = datetime.datetime.combine(d, datetime.time())
+            for s in self.duty(d):
+                start = midnight + datetime.timedelta(minutes=s["start"])
+                end = midnight + datetime.timedelta(minutes=s["end"] + (calllog.DAY if s["end"] <= s["start"] else 0))
+                if calllog.same_person(name, s["name"]) and start - datetime.timedelta(minutes=calllog.EARLY) <= now <= end:
+                    return d
+        for ahead in range(0, 15):
+            d = now.date() + datetime.timedelta(days=ahead)
+            if any(calllog.same_person(name, s["name"]) for s in self.duty(d)):
+                return d
+        recent = self.recent_shifts(1)
+        return recent[0][0] if recent else now.date()
 
     def other_typed(self, *_):
         text = self.other.get().strip()
         if text:
             self.set_name(text, typed=True)
         elif self.name not in self.pills:             # the box was emptied: back to whoever is at the desk
+            if not self.settle():
+                return
             self.touched_name = False
             self.follow_the_desk()
             self.select()
@@ -556,8 +620,26 @@ class App:
             if call:
                 self.grids["calls"].set_cursor(calllog.edit_key(call), "time")
 
+    def schedule_aim(self):
+        """Keep one deferred cursor move, owned by this window's lifetime."""
+        if self.gone:
+            return
+        if self.aim_job:
+            self.root.after_cancel(self.aim_job)
+        self.aim_job = self.root.after(150, self.aim_after_layout)
+
+    def aim_after_layout(self):
+        self.aim_job = None
+        if not self.gone:
+            self.aim()
+
     def toggle_chooser(self):
-        self.choosing = not self.choosing
+        if self.beta.opened:
+            if not self.beta.hide():
+                return
+            self.choosing = True
+        else:
+            self.choosing = not self.choosing
         self.page_forced = False
         self.show_chooser()
         self.show_page()
@@ -570,8 +652,47 @@ class App:
 
     def resized(self, event):
         """The window was made wider or narrower: the printed page comes back, or gives way, beside the chooser."""
-        if event.widget is self.root and self.choosing and self.page_on() != bool(self.side.winfo_ismapped()):
+        if event.widget is not self.root:
+            return
+        self.fit_header()
+        if self.choosing and self.page_on() != bool(self.side.winfo_ismapped()):
             self.show_page()
+
+    def fit_header(self):
+        """Keep the full Auto green state readable; compact presentation never changes the chosen side panels."""
+        width, skin, px = self.root.winfo_width(), self.skin, self.px
+        if width <= 1:
+            return
+        change = self.buttons["change"]
+        full = "Hide controller and day" if self.choosing else "Show controller and day"
+        fixed = sum(self.buttons[k].wide(skin, self.buttons[k].text) for k in ("auto", "theme")) + self.clock.winfo_reqwidth()
+        who = max(skin.measure("subtitle", self.who_label.cget("text")), skin.measure("body", self.when_label.cget("text")))
+        compact = width < px(1100) or who + change.wide(skin, full) + fixed + px(64) > width
+        change.label(("Hide choices" if self.choosing else "Choose shift") if compact else full)
+        change.pack_configure(padx=(px(8 if compact else 16), 0))
+        room = max(px(180), width - fixed - change.wide(skin, change.text) - px(64)) if compact else 0
+        self.who_label.configure(wraplength=room, justify="left")
+        self.when_label.configure(wraplength=room, justify="left")
+
+    def fit_file_status(self):
+        """Separate the count and file status even when the chooser leaves only a narrow main panel."""
+        width, px = self.file_status.winfo_width(), self.px
+        if width <= 1:
+            return
+        full = self.tally_text(self.pack)
+        files_width = self.skin.measure("caption", self.files_label.cget("text")) + px(4)
+        need = self.skin.measure("body", full) + files_width + px(16)
+        stacked = need > width
+        available = max(1, width - px(4) - (0 if stacked else files_width + px(12)))
+        self.tally.configure(text=self.tally_text(self.pack, width=available))
+        self.summary_panel.configure(height=px(148 if stacked else 124))
+        if stacked == self.status_stacked:
+            return
+        self.status_stacked = stacked
+        self.tally.grid_configure(columnspan=2 if stacked else 1)
+        self.files_label.grid_configure(row=1 if stacked else 0, column=0 if stacked else 1,
+                                       columnspan=2 if stacked else 1, padx=0 if stacked else (px(12), 0),
+                                       pady=(px(2), 0) if stacked else 0)
 
     def show_chooser(self):
         px = self.skin.px
@@ -583,6 +704,7 @@ class App:
             self.chooser.pack_forget()
         self.buttons["change"].label("Hide controller and day" if self.choosing else "Show controller and day")      # (never "Close": that read as closing the program)
         self.buttons["change"].light(self.choosing)   # a panel's button is lit while its panel is out
+        self.fit_header()
 
     def refresh_chooser(self):
         skin = self.skin
@@ -726,7 +848,7 @@ class App:
             self.auto_run()
             if first:
                 self.fill_extras()
-                self.root.after(150, self.aim)        # (once the table has its size)
+                self.schedule_aim()                 # (once the table has its size)
                 marker = os.environ.get("CCL_DONE_FILE")      # automated checks wait for this
                 if marker:
                     with open(marker, "w", encoding="utf-8") as f:
@@ -758,7 +880,7 @@ class App:
             self.show_clock()
             self.desk_handover()
             was = (self.name, list(self.dates))
-            if not (self.touched_name or self.touched_date) and not any(g.box for g in self.grids.values()):
+            if not (self.touched_name or self.touched_date) and not any(g.box for g in self.grids.values()) and not self.typing():
                 self.follow_the_desk()
             if not self.typing():                     # never under a cell being typed in (one only opened is fine)
                 before = self.watch_before
@@ -847,9 +969,15 @@ class App:
         pack = self.pack
         who = self.meta(pack)["supervisor"]
         stems = calllog.shift_stems(pack["date"], who)
-        before = calllog.snapshot(stems)
-        result = action()
-        after = calllog.snapshot(stems)
+        self.change_error = None
+        try:
+            before = calllog.snapshot(stems)
+            result = action()
+            after = calllog.snapshot(stems)
+        except (OSError, calllog.Problem) as exc:
+            self.change_error = "Could not finish saving: %s. Keep this edit open and check the saved data before retrying." % exc
+            self.say(self.change_error, "check")
+            return None
         if after != before:
             self.undone.append((what, pack["date"], who, before, after))
             del self.undone[:-200], self.redone[:]
@@ -866,13 +994,22 @@ class App:
         if not source:
             self.say("Nothing to %s." % ("redo" if forward else "undo"))
             return
-        what, date, who, before, after = source.pop()
-        target.append((what, date, who, before, after))
+        entry = source[-1]
+        what, date, who, before, after = entry
         if isinstance(before, tuple) and before[:1] == ("green",):   # a Green box press: the other way, on the roster
-            self.green_back(before, forward)
+            if self.green_back(before, forward) is False:
+                return
+            source.pop()
+            target.append(entry)
             self.say("%s: %s" % ("Done again" if forward else "Undone", what[:1].lower() + what[1:]))
             return
-        calllog.restore(after if forward else before)
+        try:
+            calllog.restore(after if forward else before)
+        except (OSError, calllog.Problem) as exc:
+            self.say("Could not finish %s: %s. Check the saved data before retrying; the history entry is still available." % ("redo" if forward else "undo", exc), "check")
+            return
+        source.pop()
+        target.append(entry)
         for at, pack in enumerate(self.packs):
             if pack["date"] == date and self.meta(pack) and self.meta(pack)["supervisor"] == who:
                 self.remake(pack)
@@ -892,11 +1029,15 @@ class App:
     def settle(self, keep=True):
         """Finish anything half-typed (an open cell, the handover box) so it is saved before the next action.
         False if a typed value cannot be right: its cell stays open saying why, and the action waits."""
+        beta = getattr(self, "beta", None)
+        if beta is not None and not beta.flush():
+            return False                       # preserve the original draft context until its save succeeds
         for grid in getattr(self, "grids", {}).values():
             if not grid.close(move="hold" if keep else None) and keep:
                 return False
-        if self.extras_job:
-            self.save_extras()
+        if self.extras_job or getattr(self, "extras_unsaved", False):
+            if self.save_extras() is False:
+                return False
         return True
 
     # ---- putting it on show ----
@@ -938,6 +1079,7 @@ class App:
         self.tally.configure(text=self.tally_text(pack))
         state = self.written(pack)
         self.files_label.configure(text="" if not meta else "Files written %s" % state["at"].strftime("%H:%M") if state else "Files not written yet")
+        self.fit_file_status()
         # the tabs, the days, the tables, the page
         counts = {"calls": len(calls) if pack and "calls" in pack else None, "patrols": len(pack["patrols"]["rows"]) if pack and "patrols" in pack else None,
                   "shift": len(pack["shift"]["entries"]) if pack and "shift" in pack else None}
@@ -968,15 +1110,15 @@ class App:
             self.notice.say("wrong", state["problems"][0][:1].upper() + state["problems"][0][1:] + ".", ("Try again", self.flush))
         elif "could not" in self.roster_said:
             self.notice.say("check", self.roster_said + ".", ("Try again", lambda: self.load_roster(force=True)))
-        elif self.handed:
-            self.notice.say("word", "Handover at %s: now on %s's shift. %s's logs for %s are written - print them now." % (
-                self.handed[3], self.handed[2], self.handed[1], self.handed[0].strftime("%a %d %b")),
-                ("Print %s's" % self.handed[1].split()[0], self.print_handed))
-        elif self.ended and pack and meta and (pack["date"], meta["supervisor"]) == self.ended:
-            self.notice.say("word", "%s's shift finished at %s: %s. The files are written - print them now." % (
-                meta["supervisor"], calllog.fmt(meta["end_min"]).zfill(5), self.tally_text(pack)), ("Open all to print", self.open_all))
-        else:
+        else:                                         # (no handover / shift-finished reminders: Lena, 20 Nov)
             self.notice.say(None)
+        self.beta.refresh()
+
+    def whatsapp_picked(self):
+        """Open the local draft/evidence workspace at the selected check-call row."""
+        calls = [self.call_for(key) for key in self.grids["calls"].picked()]
+        call = next((call for call in calls if call), None)
+        self.beta.show(calllog.edit_key(call) if call else None)
 
     def pill(self, words, live):
         skin, px = self.skin, self.skin.px
@@ -985,11 +1127,22 @@ class App:
         self.state_pill.configure(text=words, font=skin.font("caption"), fg=skin["ink"] if live else skin["ink2"], compound="center", padx=0, pady=0)
         return skin.shape(wide, px(24), px(12), skin["tint"] if live else skin["sunk"], skin["tint_edge"] if live else None)
 
-    def tally_text(self, pack):
+    def tally_text(self, pack, width=None):
+        def fit(text, *shorter):
+            if width is None:
+                return text
+            for candidate in (text,) + shorter:
+                if self.skin.measure("body", candidate) <= width:
+                    return candidate
+            candidate = shorter[-1] if shorter else text
+            while candidate and self.skin.measure("body", candidate.rstrip() + "…") > width:
+                candidate = candidate[:-1]
+            return candidate.rstrip() + "…" if candidate else ""
+
         if self.view is None:
-            return "Reading the roster..."
+            return fit("Reading the roster...")
         if not pack or not self.meta(pack):
-            return pack["problems"][0][:1].upper() + pack["problems"][0][1:] if pack and pack["problems"] else ""
+            return fit(pack["problems"][0][:1].upper() + pack["problems"][0][1:] if pack and pack["problems"] else "")
         calls = pack["calls"]["calls"] if "calls" in pack else []
         stage, gone = self.stage(pack), self.gone_minutes(pack)
         made = [c for c in calls if c["call_text"] and not c["ahead"]]
@@ -998,14 +1151,19 @@ class App:
         rounds, lines = len(pack["patrols"]["rows"]) if "patrols" in pack else 0, len(pack["shift"]["entries"]) if "shift" in pack else 0
         count = lambda n, word: "%d %s%s" % (n, word, "" if n == 1 else "s")
         if stage == "live" and calls:
-            text = "%d of %s made" % (len(made), count(len(calls), "call")) + self.green_count(pack, made)
+            base = "%d of %s logged" % (len(made), count(len(calls), "call")) + self.green_count(pack, made)
+            text = base
             if to_come:
                 nxt = to_come[0]
                 text += "   -   next due %s: %s, %s" % (nxt["due"].zfill(5), nxt["name"], nxt["venue"])
-            return text + ("   -   %d filled in ahead" % ahead if ahead else "")
+            tail = "   -   %d filled in ahead" % ahead if ahead else ""
+            return fit(text + tail, base + tail, base,
+                       "%d/%d calls logged%s" % (len(made), len(calls), self.green_count(pack, made).split(" (")[0]))
         if stage == "before" and calls:
-            return "%s to make   -   first due %s: %s, %s" % (count(len(calls), "call"), calls[0]["due"].zfill(5), calls[0]["name"], calls[0]["venue"])
-        return "   -   ".join([count(len(calls), "call") + self.green_count(pack, calls), count(rounds, "patrol"), count(lines, "log line")])
+            return fit("%s to make   -   first due %s: %s, %s" % (count(len(calls), "call"), calls[0]["due"].zfill(5), calls[0]["name"], calls[0]["venue"]),
+                       "%s to make" % count(len(calls), "call"))
+        base = count(len(calls), "call") + self.green_count(pack, calls)
+        return fit("   -   ".join([base, count(rounds, "patrol"), count(lines, "log line")]), base)
 
     def green_count(self, pack, calls):
         """', 44 green (2 not Ok, 1 yellow)' - how many of these calls are green on the roster, and why the others are not."""
@@ -1085,9 +1243,23 @@ class App:
             if said:
                 self.say(re.sub(r"\s*(\[[A-Z]+\d+\]\s*)+$", "", said[0][:1].upper() + said[0][1:]), "check")
 
+    def call_pointed(self, key):
+        """The pointer is over a check call (key) or none: the line under the table says what WhatsApp gave for it,
+        and goes back to what it said before when the pointer moves off. Never raises (it runs on every move)."""
+        try:
+            call = self.call_for(key) if key is not None and self.pack and "calls" in self.pack else None
+            text = whatsapp.story(call) if call else None
+            if text:
+                self.said_label.configure(text=text, fg=self.skin["ink2"])
+            else:
+                self.said_label.configure(text=self.said, fg=self.skin["amber" if self.said_kind == "check" else "ink2"])
+        except Exception:
+            pass
+
     def typing(self):
-        """Is something being typed in a cell (not just a cell opened)? Then the table waits to be built again."""
-        return any(g.box and not g.untouched() for g in self.grids.values())
+        """Keep edited cells and unsaved handover notes in their original shift until they can be saved."""
+        return (bool(getattr(self, "extras_job", None) or getattr(self, "extras_unsaved", False))
+                or any(g.box and not g.untouched() for g in self.grids.values()))
 
     def refill(self):
         for g in self.grids.values():
@@ -1128,11 +1300,15 @@ class App:
     def show_tab(self, kind):
         if not self.settle():
             return
+        if self.beta.opened and not self.beta.hide():
+            return
         self.tab = kind
         self.refresh()
 
     def show_day(self, at):
         if not self.settle():
+            return
+        if self.beta.opened and not self.beta.hide():
             return
         self.day = at
         self.refresh()
@@ -1141,6 +1317,8 @@ class App:
     def toggle_preview(self):
         """The button always does what it says: hide the page if it is on show, show it if it is not - also beside
         the chooser in a narrow window, where the table then gives up some of its width."""
+        if self.beta.opened and not self.beta.hide():
+            return
         if self.page_on():
             self.previewing = self.page_forced = False
         else:
@@ -1157,6 +1335,9 @@ class App:
                 self.grids["calls"].set_cursor(calllog.edit_key(call), "time")
 
     def add_row(self):
+        if self.beta.opened:
+            self.beta.inform("Return to logs before adding a patrol or shift-log entry.")
+            return
         if self.tab == "patrols":
             self.add_patrol()
         elif self.tab == "shift":
@@ -1189,10 +1370,13 @@ class App:
                 waiting = False
             if c["ahead"]:
                 row["marks"].update(time="ahead", resp="ahead")
-            elif c["timed"]:
+            elif c["timed"] and not c.get("heard_time"):    # the dot means typed by hand; WhatsApp's times have none
                 row["marks"]["time"] = "hand"
             if c["edited"] and c["response"] and c["response"] != calllog.RESPONSE:
                 row["marks"]["resp"] = "hand"
+            hint = whatsapp.cell_hint(c)              # what WhatsApp gave, where the response goes (display only)
+            if hint:
+                row["cells"]["resp"], row["tones"]["resp"] = hint
             if "[%s]" % c["ref"] in notes:
                 row["note"] = True
             rows.append(row)
@@ -1225,16 +1409,33 @@ class App:
                         if again and not again["call_text"]:
                             calllog.save_edit(log, again, "response", None)
             else:
-                text = calllog.RESPONSE if not text or text.lower() == calllog.RESPONSE.lower() else text    # ("ok", "OK", nothing: Ok)
-                if text == call["response"]:
+                # None puts the generated response back. While WhatsApp decides a call (waiting for a reply), "Ok"
+                # typed by hand is stored as Ok - storing None there put the blank straight back and did nothing.
+                value = calllog.response_to_save(call, text)
+                provenance_changed = False
+                if whatsapp.is_for(log["meta"]["supervisor"]):
+                    saved = calllog.load_edits(log["stem"]).get(key)
+                    saved_response = saved.get("response") if isinstance(saved, dict) else None
+                    if text.lower() == calllog.RESPONSE.lower():
+                        # Retyping a generated Ok is an explicit phone/manual confirmation, even though the visible
+                        # word stays the same. Keep it in the normal edit history so Auto green, undo and redo agree.
+                        value = calllog.RESPONSE
+                        provenance_changed = not (isinstance(saved_response, str)
+                            and saved_response.strip().lower() == calllog.RESPONSE.lower())
+                    elif not text and saved_response is not None:
+                        provenance_changed = True       # clearing the cell removes explicit evidence, even if default is Ok
+                result = value if value is not None else call.get("default_response", calllog.RESPONSE)
+                if result == call["response"] and not provenance_changed:
                     return None
                 if not call["call_text"]:
                     raise calllog.Problem("That call has no time yet - give it a time first.")
-                what = "Call %s, %s: response %s" % (call["no"], call["name"], text or calllog.RESPONSE)
-                action = lambda: calllog.save_edit(log, call, "response", text if text and text != calllog.RESPONSE else None)
+                what = "Call %s, %s: response %s" % (call["no"], call["name"], result or "back to waiting for a reply")
+                action = lambda: calllog.save_edit(log, call, "response", value)
         except calllog.Problem as e:
             return str(e)
         self.change(what, action)
+        if self.change_error:
+            return self.change_error
         again = self.call_for(key)
         if field == "resp" and again:
             self.response_changed(again)
@@ -1259,6 +1460,8 @@ class App:
                 if kind in pack:
                     calllog.fill_ahead(pack[kind], on)
         self.change("Filled in to the end of the shift" if on else "The rest of the shift is blank again", action)
+        if self.change_error:
+            return
         if on:
             calls = self.pack["calls"]["meta"]["early"]
             self.say("Filled in to the end of the shift: %d call%s ahead of the clock. Change any that turn out different." % (calls, " is" if calls == 1 else "s are"))
@@ -1283,6 +1486,8 @@ class App:
         """A change to the patrols, and whatever else it did: a usual round it took the place of, an overlap."""
         covered = list(self.pack["patrols"]["covered"])
         result = self.change(what, action)
+        if self.change_error:
+            return None
         row = result if row is None else row
         log = self.pack["patrols"]
         mine = next((r for r in log["rows"] if r["id"] == row), None)
@@ -1328,7 +1533,7 @@ class App:
         except calllog.Problem as e:
             return str(e)
         self.patrol_change(what, lambda: calllog.patrol_set(log, key, **change), key)
-        return None
+        return self.change_error
 
     def add_patrol(self):
         pack = self.pack
@@ -1344,6 +1549,8 @@ class App:
             return
         times = calllog.fmt(start).zfill(5), calllog.fmt(finish).zfill(5)
         new = self.patrol_change("Patrol added at %s" % times[0], lambda: calllog.patrol_add(log, *times))
+        if self.change_error:
+            return
         self.show_tab("patrols")
         self.grids["patrols"].open(new, "start")
 
@@ -1397,11 +1604,13 @@ class App:
             return str(e)
         if text == entry[field]:
             return None
-        if self.fresh == key:
-            self.fresh = None                         # something was typed in it: a real line now
         self.keep_shift("Log line %s: %s" % (entry["time"] or text if field == "time" else entry["time"] or "(no time)",
                                              {"time": "time %s" % (text or "taken out"), "area": "place %s" % text, "text": "what happened"}[field]),
                         [dict(e, **{field: text}) if e["id"] == key else e for e in log["entries"]])
+        if self.change_error:
+            return self.change_error
+        if self.fresh == key:
+            self.fresh = None                         # something was saved in it: a real line now
         return None
 
     def add_line(self):
@@ -1414,6 +1623,8 @@ class App:
         new = {"id": calllog.new_entry_id(log), "time": calllog.fmt(gone).zfill(5) if live else "", "area": "", "text": ""}
         self.keep_shift("New line: type %s; Enter moves along the row" % ("the place and what happened" if live else "the time, the place and what happened"),
                         log["entries"] + [new])
+        if self.change_error:
+            return
         self.fresh = new["id"]
         self.show_tab("shift")
         self.grids["shift"].open(new["id"], "area" if live else "time")
@@ -1426,6 +1637,9 @@ class App:
         entry, why = self.shift_entry(key), self.grids["shift"].refused
         if entry and not entry["area"] and not entry["text"]:
             self.keep_shift("Nothing was typed, so the new line was taken away", [e for e in self.pack["shift"]["entries"] if e["id"] != key])
+            if self.change_error:
+                self.fresh = key
+                return
             if self.undone and len(self.undone) >= 2:         # adding it and taking it away are not things to undo
                 del self.undone[-2:]
                 self.show_buttons()
@@ -1481,9 +1695,14 @@ class App:
         typed = (self.handover.get("1.0", "end").strip(), self.supervisor.get().strip(), self.incoming.get().strip())
         if typed != (log["handover"], log["supervisor"], log["incoming"]):
             self.keep_shift("Handover notes and names saved")
+            self.extras_unsaved = bool(self.change_error)
+            if self.extras_unsaved:
+                return False
             lines = len(forms.wrap(self.pack["shift"]["handover"], "F1", 10.5, forms.WIDTH - 8))
             if lines > 6:
                 self.say("Saved, but the handover notes run past the six lines on the form - shorten them.", "check")
+        self.extras_unsaved = False
+        return True
 
     # ---- confirmed: the person's name green on the roster (rostercolour.py) ----
     def may_confirm(self, pack):
@@ -1552,6 +1771,9 @@ class App:
 
     def confirm_picked(self):
         """Ctrl+G: the Green box of the row(s) picked in the check calls."""
+        if self.beta.opened:
+            self.beta.inform("Return to Check calls and select the guard before changing a roster colour.")
+            return
         if not self.settle():                         # (a response being typed is saved first)
             return
         calls = [c for c in (self.call_for(k) for k in self.grids["calls"].picked()) if c] if self.tab == "calls" and self.pack and "calls" in self.pack else []
@@ -1578,6 +1800,9 @@ class App:
     def confirm(self, calls):
         """The Green box by hand: these names green on the roster - or, when every one of them is green already, white.
         The hand decides for each from now on (kept with the shift) until its response changes. Undoable."""
+        if self.beta.opened:
+            self.beta.inform("Return to Check calls and select the guard before changing a roster colour.")
+            return
         link = self.the_link()
         if link is None:
             return
@@ -1587,30 +1812,78 @@ class App:
         action = "white" if all(self.green(c) == "on" for c in calls) else "green"
         stem = self.pack["calls"]["stem"]
         done = []
+        # 21 Nov (Lena): "when auto green is off and i click on someone name to click on green then when it turns
+        # green make it that time not the auto time". With Auto green off, a name turned green by hand gets the minute
+        # of the click as its time of call, in place of the generated one - saved when the roster says it IS green
+        # (stamp_green, from coloured). A time typed by hand or the guard's WhatsApp reply time is kept; a click outside
+        # the shift's hours changes no time. Undo of the press takes that time away again.
+        stamped = {"calls": []}                       # (filled in as the roster answers; kept with the undo entry)
+        at = None
+        if action == "green" and not self.auto_green:
+            try:
+                at = calllog.read_time(datetime.datetime.now().strftime("%H:%M"), self.pack["calls"])
+            except calllog.Problem:
+                at = None
         for call in calls:
             if action == "green" and self.green(call) == "on" or self.green(call) == "busy":
                 continue
             ekey = calllog.edit_key(call)
             done.append((ekey, call["ref"], call["name"], self.decisions(stem).get(ekey)))
             self.decide(stem, ekey, action)
+            if at and not call["timed"] and (call["call_text"] != at or call["ahead"]):
+                self.stamp_wait[(call["ref"], call["name"])] = (stem, dict(call), at, stamped)
+            else:
+                self.stamp_wait.pop((call["ref"], call["name"]), None)
             self.send_colour(call["ref"], call["name"], action, self.roster_colour(call))
         if done:
             names = ", ".join(n for _, _, n, _ in done)
-            self.undone.append(("Green box: %s %s" % (names, action), self.pack["date"], self.meta(self.pack)["supervisor"], ("green", stem, done, action), None))
+            self.undone.append(("Green box: %s %s" % (names, action), self.pack["date"], self.meta(self.pack)["supervisor"], ("green", stem, done, action, stamped), None))
             del self.undone[:-200], self.redone[:]
         self.refresh()
 
+    def stamp_green(self, waiting):
+        """The roster says a name turned green by hand IS green: its time of call becomes the minute of the click.
+        Returns that time, or None if it could not be saved."""
+        stem, call, at, stamped = waiting
+        try:
+            calllog.save_edit({"stem": stem}, call, "time", at)
+        except (OSError, calllog.Problem) as exc:
+            self.say("%s is green, but the time of call could not be saved: %s." % (call["name"], exc), "check")
+            return None
+        stamped["calls"].append((call, at))
+        self.rebuild_stem(stem)
+        return at
+
+    def rebuild_stem(self, stem):
+        """Build again, and write, the shown shift whose corrections are kept under this name (if it is on show)."""
+        for pack in self.packs:
+            if "calls" in pack and pack["calls"]["stem"] == stem:
+                self.remake(pack)
+                self.write(pack)
+
     def green_back(self, entry, forward):
         """Undo (or redo) a Green box press: the other colour on the roster, and the hand's earlier decision back."""
-        _, stem, done, action = entry
+        _, stem, done, action = entry[:4]
+        stamped = entry[4] if len(entry) > 4 and entry[4] else {"calls": []}   # (times of call the press gave, 21 Nov)
         link = self.the_link()
         if link is None:
-            return
+            return False
+        if stamped["calls"]:
+            try:
+                for call, at in stamped["calls"]:      # (those calls had no time of their own before: None = generated)
+                    calllog.save_edit({"stem": stem}, call, "time", at if forward else None)
+            except (OSError, calllog.Problem) as exc:
+                self.say("Could not finish %s: %s. Check the saved data before retrying; the history entry is still available." % ("redo" if forward else "undo", exc), "check")
+                return False
+            self.rebuild_stem(stem)
+        for _, ref, name, _ in done:                  # (an answer still to come must not give the time after an undo)
+            self.stamp_wait.pop((ref, name), None)
         for ekey, ref, name, before in done:
             to = action if forward else ("white" if action == "green" else "green")
             self.decide(stem, ekey, action if forward else before)
             self.send_colour(ref, name, to, rostercolour.WHITE if to == "green" else rostercolour.GREEN)
         self.refresh()
+        return True
 
     def send_colour(self, ref, name, action, was, auto=False):
         """One request to the roster's script, from a worker thread; the answer comes back through the queue."""
@@ -1628,6 +1901,7 @@ class App:
     def coloured(self, ref, name, action, answer, auto=False):
         """The roster's script has answered about one name (auto: a request auto green made)."""
         self.sending.pop((ref, name), None)
+        waiting = None if auto else self.stamp_wait.pop((ref, name), None)
         if auto:
             self.auto_busy = False
             self.auto_job = self.root.after(300, self.auto_run)      # the next one, if there is one
@@ -1635,8 +1909,10 @@ class App:
         if answer.get("ok"):
             self.calm()
             self.pending[(ref, name)] = (action == "green", time.time())
+            at = self.stamp_green(waiting) if waiting and action == "green" else None
             if not auto:                              # (auto green's own are counted on its button, not said one by one)
-                self.say("%s is %s on the roster (%s)." % (name, "green" if action == "green" else "white again", ref))
+                self.say("%s is %s on the roster (%s)%s." % (name, "green" if action == "green" else "white again", ref,
+                                                              ", time of call %s" % at if at else ""))
             if self.reread_job:                       # read the roster again once the clicking stops, so its copy shows it
                 self.root.after_cancel(self.reread_job)
             self.reread_job = self.root.after(8000, self.reread)
@@ -1704,9 +1980,11 @@ class App:
         self.keep_settings()
         due = len([d for d in self.auto_due() if d[3] == who])
         self.show_auto()
-        self.say("Auto green is on for %s's shifts - %s. The roster follows the responses: Ok turns a white name green once "
-                 "its call time has passed, anything else turns it white; never yellow, never a name struck through; a Green "
-                 "box pressed by hand decides for that name." % (who, "%d to do now" % due if due else "nothing to do yet"))
+        rule = ("A new green needs a saved manual confirmation, a matched confirming reply, or the configured trusted-person rule. "
+                "Uncertain replies need review." if whatsapp.replies_for(who) else
+                "Eligible Ok responses become green once their call time has arrived.")
+        self.say("Auto green is on for %s's shifts - %s. %s Yellow and crossed-out names are left alone; "
+                 "a Green box pressed by hand takes priority." % (who, "%d to do now" % due if due else "nothing to do yet", rule))
         self.auto_run()
 
     def show_auto(self):
@@ -1720,6 +1998,87 @@ class App:
             text += " (waiting)"
         button.label(text)
         button.light(on)
+        self.fit_header()
+
+    def wa_logs(self):
+        """The logs the WhatsApp reader works on: the shift on now of each controller in whatsapp.json (just Lena for
+        now), and any of theirs on show."""
+        if self.view is None:
+            return []
+        now, logs = datetime.datetime.now(), []
+        for back in (1, 0):
+            day = now.date() - datetime.timedelta(days=back)
+            for who in whatsapp.settings()["controllers"]:
+                try:
+                    log = calllog.build(day, self.view, who, now=now)
+                except calllog.Problem:
+                    continue
+                midnight = datetime.datetime.combine(day, datetime.time())
+                if midnight + datetime.timedelta(minutes=log["meta"]["start_min"] - 120) <= now <= midnight + datetime.timedelta(minutes=log["meta"]["end_min"] + 120):
+                    logs.append(log)
+        logs += [p["calls"] for p in self.packs if "calls" in p and whatsapp.is_for(p["calls"]["meta"]["supervisor"])
+                 and all(p["calls"]["stem"] != l["stem"] for l in logs)]
+        return logs
+
+    def wa_says(self):
+        """May the bottom line say anything about WhatsApp? Only on Lena's log, and only while Auto read uses the replies."""
+        try:
+            pack = self.pack
+            who = self.meta(pack)["supervisor"] if pack and "calls" in pack else self.name
+        except Exception:
+            who = self.name
+        return whatsapp.replies_for(who)
+
+    def wa_watch(self):
+        """Every WA_EVERY seconds: what the WhatsApp reader reported, worked into the logs. The logs are built again
+        only when something really changed, and never under a cell being typed in. Must never raise."""
+        try:
+            if time.time() - self.wa_purged > 3600:   # staff's messages go after a week, also while the window stays open
+                whatsapp.purge()
+                self.wa_purged = time.time()
+            self.wa_receiver_elsewhere = False         # owning, disabled or unavailable is not another verified window
+            if not whatsapp.settings()["controllers"]:
+                return
+            if self.wa_server is None and whatsapp.link() is not None:
+                self.wa_server = whatsapp.start()     # the window that held the receiver has closed: take it over
+                self.wa_receiver_elsewhere = self.wa_server is None and whatsapp.ping()
+                if self.wa_server is None and not self.wa_receiver_elsewhere and self.wa_said != "port" and self.wa_says():
+                    self.wa_said = "port"             # not another Check Call Log: some other program has the port
+                    self.say("The WhatsApp reader cannot connect: port %d on this PC is taken by another program."
+                             % whatsapp.link()["port"], "check")
+            elif whatsapp.link() is None and self.wa_said != "setup" and self.wa_says():
+                self.wa_said = "setup"
+                self.say("The WhatsApp reader is not set up on this PC: run  python tool\\whatsapp.py setup  and reload "
+                         "the add-on in Chrome.", "check")
+            state, why = whatsapp.reader_state()
+            live = state == "on"
+            if live != self.wa_live and self.wa_says():  # (nothing WhatsApp on another's log, or with Auto read off -
+                                                        # turning it on then says the current state)
+                at, _ = whatsapp.last_beat()
+                if live:
+                    self.say("WhatsApp reader connected. Observed messages are checked against the shift; uncertain senders or "
+                             "replies still need review. Connection alone is not a guard's confirmation.")
+                elif self.wa_live is None and self.wa_said not in ("setup", "port"):
+                    self.say("WhatsApp reader not connected (%s) - record confirmations by hand until it is connected."
+                             % why, "check")
+                elif self.wa_live:                    # it was on and has stopped
+                    self.say("WhatsApp reader off since %s (%s) - mark replies by hand until it is back."
+                             % (time.strftime("%H:%M", time.localtime(at)), why), "check")
+                self.wa_live = live
+            changed = False
+            for log in self.wa_logs():
+                changed = whatsapp.update(log) or changed
+            if changed and not self.typing():
+                self.rebuild()
+                self.refresh()
+                self.refill()
+                self.auto_run()
+            self.beta.poll()
+        except Exception:
+            pass                                      # (never let the reader stop the window)
+        finally:
+            if not self.gone:
+                self.wa_job = self.root.after(WA_EVERY * 1000, self.wa_watch)
 
     def auto_logs(self):
         """The shifts on now of every controller Auto green is on for - built here, whatever is on show."""
@@ -1743,22 +2102,43 @@ class App:
         is anything else (not blank: a call not made has none) and is green turns white. Never yellow or any other
         colour (a person's decision), never green for a name struck through on the roster (maybe cancelled: only the
         Green box by hand), never a name whose Green box was pressed by hand (until its response changes), never one
-        being sent or tried in the last 5 minutes."""
+        being sent or retried for the same colour in the last 5 minutes."""
         greens, whites = [], []
         for log in self.auto_logs():
             hand = self.decisions(log["stem"])
+            # A configured WhatsApp controller must never turn a generated/prefilled Ok into a new roster
+            # confirmation. No reader yet (or a pre-reader call) keeps the legacy printed log unchanged, but
+            # green still needs an explicit saved response, a same-shift reply, or the user's trusted policy.
+            needs_evidence = whatsapp.replies_for(log["meta"]["supervisor"])
+            response_edits = calllog.load_edits(log["stem"]) if needs_evidence else {}
+            trusted_names = whatsapp.trusted_names() if needs_evidence else set()
             for c in log["calls"]:
                 if not c.get("ref") or not rostercolour.changeable(c.get("fill")) or (c["ref"], c["name"]) in self.sending:
                     continue
                 ekey = calllog.edit_key(c)
-                if ekey in hand or time.time() - self.tried.get((log["stem"], ekey), 0) < 300:
+                if ekey in hand:
                     continue
                 said, colour = c["response"].strip().lower(), self.roster_colour(c)
+                action = None
                 if said == calllog.RESPONSE.lower() and c["call_text"] and not c["ahead"] and colour == rostercolour.WHITE \
                         and not c.get("strike"):     # (struck through: maybe cancelled - the Ok was only assumed)
-                    greens.append((c, "green", log["stem"], log["meta"]["supervisor"]))
+                    saved = response_edits.get(ekey)
+                    manual = isinstance(saved, dict) and isinstance(saved.get("response"), str) \
+                        and saved["response"].strip().lower() == calllog.RESPONSE.lower()
+                    heard = c.get("heard") or {}
+                    confirmed = heard.get("response") == calllog.RESPONSE
+                    trusted = whatsapp.trusted(c["name"], trusted_names) and not heard
+                    if not needs_evidence or manual or confirmed or trusted:
+                        action = "green"
                 elif said and said != calllog.RESPONSE.lower() and colour == rostercolour.GREEN:
-                    whites.append((c, "white", log["stem"], log["meta"]["supervisor"]))
+                    action = "white"
+                elif not said and (c.get("heard") or {}).get("taken_back") and c["call_text"] and colour == rostercolour.GREEN:
+                    # he said yes on WhatsApp (and went green), then took it back ("Wrong text sorry", "can't come"):
+                    # the response is blank again, waiting for the controller - and the roster must not say confirmed
+                    action = "white"
+                tried_key = (log["stem"], ekey)
+                if action and not (self.tried_target.get(tried_key) == action and time.time() - self.tried.get(tried_key, 0) < 300):
+                    (greens if action == "green" else whites).append((c, action, log["stem"], log["meta"]["supervisor"]))
         return whites + greens
 
     def response_changed(self, call):
@@ -1770,6 +2150,7 @@ class App:
             ekey = calllog.edit_key(call)
             self.decide(stem, ekey, None)
             self.tried.pop((stem, ekey), None)
+            self.tried_target.pop((stem, ekey), None)
         said = call["response"].strip().lower()
         if self.auto_green and said and said != calllog.RESPONSE.lower() and self.green(call) in ("on", "busy"):
             self.say("Call %s, %s: response %s - not confirmed, so the name goes back to white on the roster." % (call["no"], call["name"], call["response"]))
@@ -1789,6 +2170,7 @@ class App:
             return
         call, action, stem, _ = due[0]
         self.tried[(stem, calllog.edit_key(call))], self.auto_busy = time.time(), True
+        self.tried_target[(stem, calllog.edit_key(call))] = action
         self.send_colour(call["ref"], call["name"], action, rostercolour.WHITE if action == "green" else rostercolour.GREEN, auto=True)
         self.refresh()
 
@@ -1972,16 +2354,23 @@ class App:
 
     def open_all(self):
         """Write the files and open the all-in-one PDF of each day on show: every form of the shift, to print in one go."""
+        if self.beta.opened and not self.beta.hide():
+            return
         self.ended = None                             # (the end-of-shift prompt has done its job)
         if not self.flush():
             return
-        opened = 0
+        opened, failed = 0, []
         for pack in self.packs:
             state = self.written(pack)
             if state and state["paths"].get("all"):
-                self.launch(state["paths"]["all"])
-                opened += 1
-        if opened:
+                if self.launch(state["paths"]["all"]) is not False:
+                    opened += 1
+                else:
+                    failed.append(os.path.basename(state["paths"]["all"]))
+        if opened and failed:
+            self.say("Opened %d PDF%s; could not open %s. Use the saved files in the output folder." %
+                     (opened, "" if opened == 1 else "s", ", ".join(failed)), "check")
+        elif opened:
             self.say("Opened the PDF to print%s." % ("" if opened == 1 else " for each of the %d days" % opened))
 
     def open_folder(self):
@@ -1992,19 +2381,29 @@ class App:
 
     def launch(self, path):
         if os.environ.get("CCL_NOOPEN"):
-            return
+            return False
         try:
             os.startfile(path)
+            return True
         except OSError as e:
             self.say("Could not open %s: %s" % (os.path.basename(path), e), "check")
+            return False
 
     def on_close(self):
-        """Keep whatever is being typed, then go. Nothing else is running: the tool starts no other program."""
-        self.settle(keep=False)
+        """Keep typed work and revoke pending WhatsApp requests before closing."""
+        if not self.settle():
+            return
+        if not self.beta.close():
+            return
         self.gone = True
-        for job in (self.poll_job, self.tick_job, self.title_job, self.extras_job, self.reread_job, self.watch_job, self.auto_job, self.script_job):
+        for job in (self.poll_job, self.tick_job, self.title_job, self.extras_job, self.reread_job, self.watch_job, self.auto_job, self.script_job, self.aim_job,
+                    getattr(self, "wa_job", None)):
             if job:
                 self.root.after_cancel(job)
+        self.aim_job = None
+        if getattr(self, "wa_server", None):          # the receiver goes with the window: nothing is left running
+            self.wa_server.shutdown()
+            self.wa_server.server_close()
         self.root.destroy()
 
 

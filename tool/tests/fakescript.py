@@ -1,5 +1,5 @@
 """The roster's script, in Python: the same checks in the same order and the same answers as the real one -
-rostercolour.SCRIPT (version 3), or with version=1 the first one, which stays on the roster until the new one is put
+rostercolour.SCRIPT (version 4), or with version=3 / version=1 the first one, which stays on the roster until the new one is put
 in (tests\\roster-script-v1.gs) - over cells held in memory. The window's checks (greenrig.py, t_green.py) use it in
 place of the real script, so nothing they do can reach the roster. t_script.py sends the real scripts (both versions)
 and this one the very same requests and requires the very same answers, so the stand-in cannot drift from them.
@@ -31,8 +31,20 @@ def not_a_name(shown, is_text=True):
             or bool(NOTE.match(shown)) or bool(WEEKDAY.match(shown)))
 
 
+def everyday(colour, near=12):
+    """Version 4's everyday(): '#fbfbfb' -> '#ffffff' (also yellow, green); any other colour as it is."""
+    c = str(colour).lower()
+    m = re.match(r"^#([0-9a-f]{6})$", c)
+    if not m:
+        return c
+    for key in (WHITE, YELLOW, GREEN):
+        if all(abs(int(c[i:i + 2], 16) - int(key[i:i + 2], 16)) <= near for i in (1, 3, 5)):
+            return key
+    return c
+
+
 class Script:
-    def __init__(self, today, key, hour=0, version=3):
+    def __init__(self, today, key, hour=0, version=4):
         self.today, self.hour, self.key, self.version = today, hour, key, version
         self.text, self.fill, self.day = {}, {}, {}      # "FK74" -> shown text; "FK74" -> "#rrggbb"; "FK" -> date or None
         self.numbers = set()                              # cells whose value is a number or a date, not text
@@ -94,7 +106,7 @@ class Script:
         if key != self.key:
             return {"ok": False, "why": "wrong key"}
         if action == "ping":
-            return {"ok": True, "sheet": "Sheet1", "version": 3} if v3 else {"ok": True, "sheet": "Sheet1"}
+            return {"ok": True, "sheet": "Sheet1", "version": self.version} if v3 else {"ok": True, "sheet": "Sheet1"}
         m = CELL_RE.match(cell) if isinstance(cell, str) else None
         if not m:
             return {"ok": False, "why": "not a cell: %s" % cell}
@@ -114,12 +126,14 @@ class Script:
         if not (day == self.today or day == yesterday and (self.hour < 12 or not v3)):
             return {"ok": False, "why": "not today", "day": day.isoformat() if day else ""}
         before = self.fill.get(cell, WHITE)
+        if self.version >= 4:                             # version 4: a few shades off white/yellow/green is that colour
+            before = everyday(before)
         if before not in MAY_CHANGE:
             return {"ok": False, "why": "coloured", "before": before}
         to = WHITE if action == "white" else GREEN
         if v3 and cell in self.merged:
             return {"ok": False, "why": "merged"}
-        if v3 and was and before != str(was).lower():
+        if v3 and was and before != (everyday(was) if self.version >= 4 else str(was).lower()):
             return {"ok": False, "why": "changed", "before": before}
         if v3 and action == "white" and before == YELLOW:
             return {"ok": False, "why": "changed", "before": before}

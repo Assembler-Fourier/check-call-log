@@ -1,4 +1,4 @@
-"""The script that goes into the roster (rostercolour.SCRIPT, version 3), run for real - by Windows' own script host
+"""The script that goes into the roster (rostercolour.SCRIPT, version 4), run for real - by Windows' own script host
 (cscript, JScript) against a fake roster that behaves the way Google's does where it matters: dates in the
 spreadsheet's own time zone, Irish summer time and its changes, getRange taking ranges, small letters, R1C1 and other
 tabs (as Google's does), a value that is not what is shown, merged cells.
@@ -72,8 +72,8 @@ CELLS = {  # ref: (shown, fill[, value when it is not the text])
     "FK1": ("Sat", "#00b0f0"), "GA1": ("Saturday", W), "GA2": ("Sat 24 Oct", W),
     "FK74": ("Lena Drayton", W), "FK75": ("John Smith", G), "FK76": ("Ann Lee", Y), "FK77": ("Ruben Corbett", "#ff9900"),
     "FK68": ("Kilcarran", "#000000"), "FK69": ("06.00-18.00", W), "FK78": ("Red Name", "#ff0000"), "FK79": ("", W),
-    "FK80": ("Lena Drayton", W), "FL74": ("Lena Drayton", W), "FJ74": ("Soren Rasmussen", W), "FI74": ("Henry Marlow", G),
-    "FS74": ("Basil Jankowski", Y), "GA74": ("Serial Today", W), "GB74": ("Serial Yesterday", W), "GC74": ("Serial Tomorrow", W),
+    "FK80": ("Lena Drayton", W), "FL74": ("Lena Drayton", W), "FJ74": ("Soren Rask", W), "FI74": ("Henry Marlow", G),
+    "FS74": ("Basil Janek", Y), "GA74": ("Serial Today", W), "GB74": ("Serial Yesterday", W), "GC74": ("Serial Tomorrow", W),
     "GD74": ("Text Header", W), "GE74": ("No Header", W), "FK81": ("  Spaced   Name ", W), "FK82": ("O'Ferreira \"Big\" Joe", W),
     "FK83": ("Grey Name", "#666666"), "FK84": ("Still Yellow", Y), "FK85": ("Afternoon Name", W),
     "FJ75": ("Night Eleven", W), "FJ76": ("Night Noon", W), "FJ77": ("Night Midnight", W), "FJ78": ("Yellow Yesterday", Y),
@@ -86,6 +86,9 @@ CELLS = {  # ref: (shown, fill[, value when it is not the text])
     "FK110": ("Tobias", W), "FK111": ("Notebook Smith", W), "FK112": ("Readie Joe", W), "FK113": ("Carl  Fielding", W),
     "FK114": ("TRUE", W, True), "FK115": ("Yellow Merged", Y), "FK116": ("22:00-Close", W), "FK117": ("Late Shift Team", "#00b0f0"),
     "GF74": ("Frac Today", W), "GG74": ("Frac Yesterday", W),
+    # version 4 (14 Nov): Yusuf Eklund's cell was #fbfbfb - a few shades off white is white; real other colours are not
+    "FK118": ("Yusuf Eklund", "#fbfbfb"), "FK119": ("Near Green", "#93d151"), "FK120": ("Pale Yellow", "#fff2cc"),
+    "FK121": ("Light Grey Two", "#d9d9d9"), "FK122": ("Near White Two", "#f3f3f3"),
     "ZA74": ("Sat27 Name", W), "ZB74": ("Sun28 Name", W), "ZC74": ("Mon29 Name", W),
 }
 MERGED = {"FK93", "FK115"}
@@ -105,7 +108,7 @@ def C(label, body, want, writes=(), at="2026-10-24 05:30", tz="Europe/Dublin", s
 
 CASES = [
     # -- the key, and requests that are not requests --
-    C("ping with the key: says it is version 3", req(action="ping"), {"ok": True, "sheet": "Sheet1", "version": 3}),
+    C("ping with the key: says it is version 4", req(action="ping"), {"ok": True, "sheet": "Sheet1", "version": 4}),
     C("ping with a wrong key", req(action="ping", key=KEY + "x"), {"ok": False, "why": "wrong key", "version": None}),
     C("ping with no key", {"action": "ping"}, {"ok": False, "why": "wrong key"}, fake=False),
     C("ping with an empty key", req(action="ping", key=""), {"ok": False, "why": "wrong key"}),
@@ -135,7 +138,7 @@ CASES = [
     # -- the name --
     C("name in other letters (case)", req(action="green", cell="FK74", name="lena drayton"), {"ok": False, "why": "moved"}),
     C("only part of the name", req(action="green", cell="FK74", name="Lena"), {"ok": False, "why": "moved"}),
-    C("someone else's name - and the answer says nothing of the cell", req(action="green", cell="FK74", name="Soren Rasmussen"),
+    C("someone else's name - and the answer says nothing of the cell", req(action="green", cell="FK74", name="Soren Rask"),
       {"ok": False, "why": "moved", "shown": None, "before": None, "day": None}),
     C("a wrong name on an orange cell says moved, not its colour", req(action="green", cell="FK77", name="Somebody Else"), {"ok": False, "why": "moved", "before": None}),
     C("no name", req(action="green", cell="FK74", name=""), {"ok": False, "why": "moved"}),
@@ -181,10 +184,10 @@ CASES = [
     C("...a yellow one too, even only checked", req(action="check", cell="FK115", name="Yellow Merged"), {"ok": False, "why": "merged"}),
     # -- the day --
     C("tomorrow's column", req(action="green", cell="FL74", name="Lena Drayton"), {"ok": False, "why": "not today", "day": "2026-10-25"}),
-    C("next week's column (yellow)", req(action="green", cell="FS74", name="Basil Jankowski"), {"ok": False, "why": "not today"}),
+    C("next week's column (yellow)", req(action="green", cell="FS74", name="Basil Janek"), {"ok": False, "why": "not today"}),
     C("two days ago", req(action="white", cell="FI74", name="Henry Marlow"), {"ok": False, "why": "not today", "day": "2026-10-22"}),
-    C("yesterday before noon (a night shift past midnight)", req(action="green", cell="FJ74", name="Soren Rasmussen"), {"ok": True, "after": G}, [("FJ74", G)]),
-    C("yesterday after noon: refused (the night is long over)", req(action="white", cell="FJ74", name="Soren Rasmussen"), {"ok": False, "why": "not today"}, at="2026-10-24 15:30"),
+    C("yesterday before noon (a night shift past midnight)", req(action="green", cell="FJ74", name="Soren Rask"), {"ok": True, "after": G}, [("FJ74", G)]),
+    C("yesterday after noon: refused (the night is long over)", req(action="white", cell="FJ74", name="Soren Rask"), {"ok": False, "why": "not today"}, at="2026-10-24 15:30"),
     C("yesterday at 11:30: still the night shift", req(action="green", cell="FJ75", name="Night Eleven"), {"ok": True, "after": G}, [("FJ75", G)], at="2026-10-24 11:30"),
     C("yesterday at 12:00 exactly: refused", req(action="green", cell="FJ76", name="Night Noon"), {"ok": False, "why": "not today"}, at="2026-10-24 12:00"),
     C("yesterday at 12:30: refused", req(action="green", cell="FJ76", name="Night Noon"), {"ok": False, "why": "not today"}, at="2026-10-24 12:30"),
@@ -203,10 +206,10 @@ CASES = [
     C("a column whose row 2 is words", req(action="green", cell="GD74", name="Text Header"), {"ok": False, "why": "not today", "day": ""}),
     C("a column with nothing in row 2", req(action="green", cell="GE74", name="No Header"), {"ok": False, "why": "not today", "day": ""}),
     # -- the spreadsheet's own time zone does not move the day (it is the control room's clock that counts) --
-    C("sheet on GMT, Sat 12:30 Dublin: Friday's column is refused", req(action="check", cell="FJ74", name="Soren Rasmussen"), {"ok": False, "why": "not today"},
+    C("sheet on GMT, Sat 12:30 Dublin: Friday's column is refused", req(action="check", cell="FJ74", name="Soren Rask"), {"ok": False, "why": "not today"},
       at="2026-10-24 12:30", tz="Etc/GMT"),
     C("sheet on GMT, Sat 00:30 Dublin: Saturday's column is today", req(action="check", cell="FK74", name="Lena Drayton"), {"ok": True}, at="2026-10-24 00:30", tz="Etc/GMT"),
-    C("sheet on New York time, Sat 15:00 Dublin: Friday's column is refused", req(action="check", cell="FJ74", name="Soren Rasmussen"), {"ok": False, "why": "not today"},
+    C("sheet on New York time, Sat 15:00 Dublin: Friday's column is refused", req(action="check", cell="FJ74", name="Soren Rask"), {"ok": False, "why": "not today"},
       at="2026-10-24 15:00", tz="America/New_York"),
     C("sheet on New York time, Sat 07:00 Dublin: Saturday's column is today", req(action="check", cell="FK74", name="Lena Drayton"), {"ok": True}, at="2026-10-24 07:00",
       tz="America/New_York"),
@@ -220,6 +223,16 @@ CASES = [
     C("...and Saturday's column (two days ago) is refused", req(action="check", cell="ZA74", name="Sat27 Name"), {"ok": False, "why": "not today"}, utc="2027-03-28 23:30"),
     C("...and Monday's column is today", req(action="check", cell="ZC74", name="Mon29 Name"), {"ok": True}, utc="2027-03-28 23:30"),
     # -- colours --
+    C("v4: a near-white name (#fbfbfb) is white: it turns green", req(action="green", cell="FK118", name="Yusuf Eklund", was=W),
+      {"ok": True, "before": W, "after": G}, writes=[("FK118", G)]),
+    C("v4: a near-green name (#93d151) is green: it turns white", req(action="white", cell="FK119", name="Near Green", was=G),
+      {"ok": True, "before": G, "after": W}, writes=[("FK119", W)]),
+    C("v4: the window's expected colour may itself be a few shades off", req(action="green", cell="FK122", name="Near White Two", was="#fafafa"),
+      {"ok": True, "before": W, "after": G}, writes=[("FK122", G)]),
+    C("v4: pale yellow (#fff2cc) is a different colour: left alone", req(action="green", cell="FK120", name="Pale Yellow"),
+      {"ok": False, "why": "coloured", "before": "#fff2cc"}),
+    C("v4: light grey (#d9d9d9) is a different colour: left alone", req(action="green", cell="FK121", name="Light Grey Two"),
+      {"ok": False, "why": "coloured", "before": "#d9d9d9"}),
     C("an orange name is left alone", req(action="green", cell="FK77", name="Ruben Corbett"), {"ok": False, "why": "coloured", "before": "#ff9900"}),
     C("a red name is left alone", req(action="white", cell="FK78", name="Red Name"), {"ok": False, "why": "coloured"}),
     C("a grey name is left alone", req(action="green", cell="FK83", name="Grey Name"), {"ok": False, "why": "coloured"}),
@@ -427,10 +440,10 @@ def parsed(text):
         return {"unreadable": text}
 
 
-# ==== 1. version 3, the script to be put in ====
+# ==== 1. version 4, the script to be put in ====
 SCRIPT = rostercolour.SCRIPT % {"key": KEY}
 proc, out = run_js("v3", harness(SCRIPT, CASES))
-check("version 3 runs under the script host without a syntax error", proc.returncode == 0 and any(l.startswith("ALL") for l in out),
+check("version 4 runs under the script host without a syntax error", proc.returncode == 0 and any(l.startswith("ALL") for l in out),
       (proc.returncode, proc.stderr[-400:], out[-3:]))
 got = answers(out)
 for i, c in enumerate(CASES):
@@ -454,8 +467,8 @@ check("the key in the script is the one given, and appears once", SCRIPT.count(K
 check("the script uses no service it does not need (no mail, no web, no Drive, no other spreadsheet)",
       not any(w in rostercolour.SCRIPT for w in ("MailApp", "GmailApp", "UrlFetchApp", "DriveApp", "openById", "openByUrl", "eval(", "Function(")))
 
-# ==== 2. the stand-in answers exactly as version 3 does ====
-model = fakescript.Script(TODAY, KEY, version=3)
+# ==== 2. the stand-in answers exactly as version 4 does ====
+model = fakescript.Script(TODAY, KEY, version=4)
 for ref, cell in CELLS.items():
     model.text[ref], model.fill[ref] = cell[0], cell[1]
     if len(cell) > 2:
@@ -476,7 +489,7 @@ for i, c in enumerate(CASES):
     compared += 1
     if mine != real:
         differ.append((c["label"], real, mine))
-check("the stand-in the window's checks use answers %d requests exactly as version 3 does" % compared, compared > 80 and not differ, differ[:3])
+check("the stand-in the window's checks use answers %d requests exactly as version 4 does" % compared, compared > 80 and not differ, differ[:3])
 
 # ==== 3. version 1 (on the roster now) and its stand-in ====
 v1 = open(os.path.join(HERE, "roster-script-v1.gs"), encoding="utf-8").read()

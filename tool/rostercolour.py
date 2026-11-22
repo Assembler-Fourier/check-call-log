@@ -32,8 +32,9 @@ TIMEOUT = 30                                          # seconds one request may 
 
 
 def is_green(fill):
-    """A fill as the roster copy gives it ('FF92D050', 'theme0', None) or as the script gives it ('#92d050')."""
-    return bool(fill) and str(fill).lower().lstrip("#")[-6:] == GREEN[1:]
+    """A fill as the roster copy gives it ('FF92D050', 'theme0', None) or as the script gives it ('#92d050') - a near
+    green counts (calllog.NEAR)."""
+    return bool(fill) and css(fill) == GREEN
 
 
 def css(fill):
@@ -42,7 +43,10 @@ def css(fill):
     if fill in (None, "", "theme0"):
         return WHITE
     m = re.match(r"^#?(?:[0-9a-fA-F]{2})?([0-9a-fA-F]{6})$", str(fill))
-    return "#" + m.group(1).lower() if m else ""
+    if not m:
+        return ""
+    near = calllog.everyday_fill(m.group(1))        # '#fbfbfb' is white: a few shades off is the same colour to the eye
+    return "#" + (near or m.group(1)).lower()
 
 
 def changeable(fill):
@@ -101,7 +105,7 @@ def send(link, action, cell="", name="", was=""):
 
 
 # ---- the script for the roster, and how to switch it on ----
-SCRIPT_VERSION = 3                                    # what a ping of the script in the roster says it is (the first had none)
+SCRIPT_VERSION = 4                                    # what a ping of the script in the roster says it is (the first had none)
 SCRIPT = r"""// NORTHWIND Security - Check Call Log: turns ONE name cell on this roster green (92D050) when the
 // controller has confirmed that person, or back to white. It can do nothing else. It never writes any text, and it
 // only colours a cell that:
@@ -110,15 +114,30 @@ SCRIPT = r"""// NORTHWIND Security - Check Call Log: turns ONE name cell on this
 //  - is under today's date, or yesterday's before noon (a night shift past midnight), by the control room's clock;
 //  - is white, yellow or green, is not merged with other cells, and is still the colour the window expects.
 // "White" only undoes a green: a yellow (not confirmed yet) is never made white. Each change is listed under
-// Apps Script > Executions. Version 3, 2026-10-25.
+// Apps Script > Executions. Version 4, 2026-11-14: a colour a few shades off white, yellow or green (e.g. #fbfbfb)
+// counts as that colour; any other colour is still left alone.
 // How to put it in: see "How to switch it on.txt" next to this file on the control-room PC.
 /** @OnlyCurrentDoc */                   // Google's permission then covers this roster only, no other spreadsheet
-var VERSION = 3;
+var VERSION = 4;
 var KEY = '%(key)s';
 var GREEN = '#92d050';
 var WHITE = '#ffffff';
 var YELLOW = '#ffff00';
 var MAY_CHANGE = {'#ffffff': 1, '#ffff00': 1, '#92d050': 1};    // white, yellow, green: any other colour is left alone
+var NEAR = 12;                           // this many shades (of 255) off on every channel is still that colour
+
+function everyday(colour) {              // '#fbfbfb' -> '#ffffff' (also yellow, green); any other colour as it is
+  var c = String(colour).toLowerCase(), m = /^#([0-9a-f]{6})$/.exec(c), keys = ['#ffffff', '#ffff00', '#92d050'];
+  if (!m) return c;
+  for (var k = 0; k < keys.length; k++) {
+    var near = true;
+    for (var i = 1; i < 7; i += 2) {
+      if (Math.abs(parseInt(c.substr(i, 2), 16) - parseInt(keys[k].substr(i, 2), 16)) > NEAR) near = false;
+    }
+    if (near) return keys[k];
+  }
+  return c;
+}
 var ZONE = 'Europe/Dublin';              // the control room's clock - whatever the spreadsheet's own setting says
 // Never a person: a start time not filled in yet ('TBC', '-close', '?? -close'); a note to the roster's readers
 // (it starts with a note word, as the PC's own roster reader knows them); a weekday heading.
@@ -179,7 +198,7 @@ function doPost(e) {
         out = {ok: false, why: 'not a name'};
       } else {
         var day = dayOf(sheet, cell.getColumn());
-        var before = String(cell.getBackground()).toLowerCase();
+        var before = everyday(cell.getBackground());
         var to = q.action === 'white' ? WHITE : GREEN;
         if (!todayOrYesterday(day)) {
           out = {ok: false, why: 'not today', day: day};
@@ -187,7 +206,7 @@ function doPost(e) {
           out = {ok: false, why: 'coloured', before: before};
         } else if (cell.isPartOfMerge()) {
           out = {ok: false, why: 'merged'};
-        } else if (q.was && before !== String(q.was).toLowerCase()) {    // not the colour the window expects: changed since
+        } else if (q.was && before !== everyday(q.was)) {    // not the colour the window expects: changed since
           out = {ok: false, why: 'changed', before: before};
         } else if (q.action === 'white' && before === YELLOW) {          // white only undoes a green
           out = {ok: false, why: 'changed', before: before};
@@ -251,7 +270,7 @@ To put in a NEWER version of the script (the link stays the same)
    (NOT "New deployment" - that makes a new link, and the window would go on using the old one.)
    If Google asks for permission again, allow it as the first time.
 4. Close the Check Call Log window and open it again. A few seconds after it opens, the line under the table
-   says "The roster's script is up to date (version 3)". If it says the roster still runs an older version,
+   says "The roster's script is up to date (version 4)". If it says the roster still runs an older version,
    step 3 did not happen: do it again.
 
 

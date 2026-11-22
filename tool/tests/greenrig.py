@@ -70,10 +70,10 @@ def tweaked(changes):
 
 
 class FakeScript(fakescript.Script):
-    """The roster's script (fakescript.Script: the real one's checks and answers, version 3 - or version=1, the one
+    """The roster's script (fakescript.Script: the real one's checks and answers, version 4 - or version=3 / version=1, the one
     the roster runs until the new one is put in) over a roster copy in memory, answering a little after each request."""
 
-    def __init__(self, today, key, roster, hour=0, version=3):
+    def __init__(self, today, key, roster, hour=0, version=4):
         super().__init__(today, key, hour=hour, version=version)
         self.roster, self.delay = roster, 0.05
         self.load_roster(roster, calllog)

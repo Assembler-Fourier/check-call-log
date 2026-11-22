@@ -194,7 +194,12 @@ rig.check("pressed again: only the calls that have happened are filled in (the r
 rig.press("undo")
 rig.check("Undo brings the filled-in state back", all(c["call_text"] for c in rig.calls()))
 rig.at("2026-10-11 07:00")
-rig.check("the morning after nothing is 'ahead' and the button has nothing left to do", not any(c["ahead"] for c in rig.calls()) and not rig.app.buttons["fill"].enabled)
+# A scheduled minute tick may have enabled the normal morning desk handover. Inspect the completed outgoing
+# shift explicitly; the incoming controller's new shift correctly still has an enabled Fill button.
+rig.show("Lena Drayton", "2026-10-10")
+rig.check("the morning after nothing is 'ahead' and the button has nothing left to do",
+          not any(c["ahead"] for c in rig.calls()) and not rig.app.buttons["fill"].enabled,
+          (rig.app.shown_who(), rig.app.pack["date"], sum(bool(c["ahead"]) for c in rig.calls()), rig.app.buttons["fill"].enabled))
 total += rig.close()
 
 # -- 7. Several days, the chooser, the looks ---------------------------------------------------------------------

@@ -16,6 +16,11 @@ import sys
 
 import greenrig as g
 
+# These are the legacy Auto green rules for a controller without the WhatsApp
+# reader configured. Configured-controller provenance is covered separately by
+# t_auto_evidence and the real-window WhatsApp cases in t_ux.
+g.calllog.whatsapp.is_for = lambda name: False
+
 # (the user's own window may be open while this runs, re-reading the roster and saving its settings: so what is
 #  compared is the content of the real link file, and the checks' own paths are checked to be scratch ones)
 REAL_LINK = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache", "roster-link.json")
@@ -55,7 +60,7 @@ rig.app.link = None
 rig.fake.gate = __import__("threading").Event()       # (hold the first answer, to look at it on its way)
 rig.press("auto")
 rig.check("switched on: lit, says what it does and how many to do now, and is remembered", rig.app.auto_green and button.lit and button.text == "Auto green: on"
-          and "Auto green is on for Lena Drayton" in rig.said() and "never yellow" in rig.said() and saved.get("auto_green_for") == ["Lena Drayton"], rig.said())
+          and "Auto green is on for Lena Drayton" in rig.said() and "Yellow and crossed-out names are left alone" in rig.said() and saved.get("auto_green_for") == ["Lena Drayton"], rig.said())
 rig.pump(300)
 rig.check("...one name is on its way, the box shows it", sum(1 for c in rig.calls() if g.state(rig, c["name"]) == "busy") == 1)
 rig.fake.gate.set()
@@ -251,7 +256,7 @@ g.settle(rig, 40)
 greens = [s for s in rig.fake.sent if s[0] == "green" and s[1] in {k for k, v in rig.fake.fill.items() if v == "#92d050"}]
 rig.check("...later, with the network back, the shift on now goes green - and nothing of tomorrow's", len(greens) >= 10 and not rig.app.auto_due()
           and not any(s[1].startswith("FL") for s in rig.fake.sent), len(greens))
-rig.show("Basil Jankowski", "2026-10-22")
+rig.show("Basil Janek", "2026-10-22")
 n = len(rig.fake.sent)
 rig.at("2026-10-23 21:15")
 g.settle(rig, 20)

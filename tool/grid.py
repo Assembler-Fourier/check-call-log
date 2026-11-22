@@ -24,11 +24,12 @@ class Grid(tk.Frame):
     enter: 'down' (Enter goes down the column) or 'along' (Enter goes along the row, then stops)."""
 
     def __init__(self, parent, skin, columns, text_of, commit, enter="down", left=None, busy=None, status=None, moved=None,
-                 row=36, head=32, gutter=0, press=None):
+                 row=36, head=32, gutter=0, press=None, pointed=None):
         super().__init__(parent, bg=skin["panel"])
         self.skin, self.columns = skin, columns
         self.text_of, self.commit, self.enter = text_of, commit, enter
         self.press = press or (lambda key, field: None)
+        self.pointed = pointed or (lambda key: None)   # told which row the pointer is over (None: none)
         self.presses = {c["field"] for c in columns if c.get("press")}
         self.left, self.busy, self.status, self.moved = left or (lambda key: None), busy or (lambda: False), status or (lambda text: None), moved or (lambda *a: None)
         px = skin.px
@@ -40,6 +41,7 @@ class Grid(tk.Frame):
         self.box = None                              # (entry, key, field) while a cell is open for typing
         self.picker = None                           # the choices offered under it, if its column has some
         self.box_from = None                         # what the open cell held when it was opened (untouched: the same)
+        self.box_touched, self.box_refilling = False, False
         self.tip = None                              # (key, field, text) while a refusal is on show
         self.refused = None                          # why the value typed last was turned down, if it was
         self.hover = None
@@ -82,6 +84,12 @@ class Grid(tk.Frame):
             self.cursor = None
         if self.tip and self.tip[0] not in self.keys:
             self.tip = None
+        if self.hover is not None:
+            # the row under the pointer may have changed under it (rebuilt, gone): say it again, so the line under the
+            # table never goes on describing a row the pointer has left
+            if self.hover not in self.keys:
+                self.hover = None
+            self.pointed(self.hover)
         self.draw()
         if self.box and self.box[1] not in self.keys:
             self.close(cancel=True)                  # its row is no longer there
@@ -289,6 +297,7 @@ class Grid(tk.Frame):
         if key != self.hover:
             self.hover = key
             self.place_marks()
+            self.pointed(key)
 
     def click(self, event):
         key, field = self.at(event)
@@ -386,6 +395,16 @@ class Grid(tk.Frame):
             entry.select_range(0, "end")
         entry.icursor("end")
         self.box, self.cursor, self.box_from = (entry, key, field), (key, field), entry.get()
+        self.box_touched, self.box_refilling = text is not None, False
+
+        def edited():
+            # Validation sees actual text mutations (typing, paste, delete/retype), including a change back to
+            # the same word. A background refill is display-only and must not manufacture confirmation intent.
+            if not self.box_refilling:
+                self.box_touched = True
+            return True
+
+        entry.configure(validate="key", validatecommand=entry.register(edited))
         if column.get("choices"):                    # a few words to pick from, or type anything
             px = skin.px
             self.picker = tk.Frame(self.body, bg=skin["raised"], highlightthickness=1, highlightbackground=skin["edge"])
@@ -437,7 +456,7 @@ class Grid(tk.Frame):
         # saved may put them in another order, and "the next row" must still mean the one that was next
         target = self.target(key, field, move) if move else None
         self.refused = None
-        if not cancel:
+        if not cancel and (self.box_touched or text != self.box_from or move == "enter"):
             self.box = None                          # (so that a redraw during the save does not move a box that is going)
             problem = self.commit(key, field, text)
             if problem:
@@ -467,7 +486,7 @@ class Grid(tk.Frame):
 
     def untouched(self):
         """An open cell nothing has been typed in (so the table may be built again under it)."""
-        return bool(self.box) and self.box[0].get() == self.box_from
+        return bool(self.box) and not self.box_touched and self.box[0].get() == self.box_from
 
     def refill(self):
         """An untouched open cell shows what its cell holds now (after the table was built again)."""
@@ -475,14 +494,19 @@ class Grid(tk.Frame):
             entry, key, field = self.box
             text = self.text_of(key, field)
             if text != entry.get():
-                entry.delete(0, "end")
-                entry.insert(0, text)
-                entry.select_range(0, "end")
+                self.box_refilling = True
+                try:
+                    entry.delete(0, "end")
+                    entry.insert(0, text)
+                    entry.select_range(0, "end")
+                finally:
+                    self.box_refilling = False
             self.box_from = entry.get()
 
     def pick(self, word):
         """One of the choices under the open cell was clicked: it goes in, and is saved."""
         if self.box:
+            self.box_touched = True                 # choosing the current value is still an explicit confirmation
             self.box[0].delete(0, "end")
             self.box[0].insert(0, word)
             self.close(move="hold")

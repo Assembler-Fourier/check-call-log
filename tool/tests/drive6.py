@@ -1,4 +1,4 @@
-"""Drive the version 6 window the way a person does - clicks and keys through the event loop - parked off-screen.
+"""Drive the version 6 window through its event loop, transparent, click-through and never active.
 
     from drive6 import Rig
     rig = Rig("case-name", now="2026-10-05 20:06")       # the clock the window and the tool see
@@ -18,7 +18,7 @@ import re
 import shutil
 import sys
 
-from drive import Clock, HOME, WORK, foreground_is_mine, never_activate
+from drive import Clock, HOME, WORK, foreground_is_mine, never_activate, quiet_root
 
 sys.dont_write_bytecode = True
 
@@ -31,8 +31,8 @@ class Rig:
         if not keep:
             for d in (self.out, self.edits):
                 shutil.rmtree(d, ignore_errors=True)
-        os.environ.update(CCL_OUT=self.out, CCL_NO_DOWNLOAD="1", CCL_NOOPEN="1", CCL_GEOMETRY="1240x960+-2600+40", CCL_EDITS=self.edits)
-        for stale in ("CCL_AUTORUN", "CCL_TAB", "CCL_DONE_FILE", "CCL_QUIET", "CCL_THEME", "CCL_QUIT_AFTER"):
+        os.environ.update(CCL_OUT=self.out, CCL_NO_DOWNLOAD="1", CCL_NOOPEN="1", CCL_QUIET="1", CCL_GEOMETRY="1240x960+-2600+40", CCL_EDITS=self.edits)
+        for stale in ("CCL_AUTORUN", "CCL_TAB", "CCL_DONE_FILE", "CCL_THEME", "CCL_QUIT_AFTER"):
             os.environ.pop(stale, None)
         loader = importlib.machinery.SourceFileLoader("app6_" + name.replace("-", "_"), os.path.join(HOME, "tool", app))
         spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -40,9 +40,13 @@ class Rig:
         loader.exec_module(self.mod)
         self.calllog = self.mod.calllog
         self.calllog.EDITS = self.edits
+        if roster is None:                            # (the public demo copy: its fixed demo roster, never the cached
+            template = os.path.join(HOME, "demo", "roster-template.xlsx")    # one, which moves a week at a time)
+            roster = template if os.path.exists(template) else None
         if roster:
             self.calllog.ROSTER_PATH = roster
             self.calllog.Roster.__init__.__defaults__ = (roster,)
+            self.calllog.roster_signature.__defaults__ = (roster,)   # (its default was fixed to the cached copy)
         self.mod.save_settings = lambda data: None
         self.mod.load_settings = lambda: dict(settings) if settings is not None else {"auto_green_for": []}
         self.clock = None
@@ -54,7 +58,7 @@ class Rig:
         import tkinter as tk
         never_activate()
         tk.Misc.bell = lambda widget, displayof=0: None
-        self.root = tk.Tk()
+        self.root = quiet_root(tk)
         self.errors, self.results = [], []
 
         def went_wrong(exc, val, tb):
@@ -91,6 +95,10 @@ class Rig:
     def at(self, text):
         """Move the clock, and let the window notice the minute has turned."""
         self.clock.set(text)
+        # We are substituting for the scheduled tick. Leaving it queued creates
+        # orphan timers each time the fake clock moves, including after teardown.
+        if self.app.tick_job:
+            self.root.after_cancel(self.app.tick_job)
         self.app.tick()
         self.pump(120)
 
@@ -213,5 +221,7 @@ class Rig:
             self.app.on_close()
             self.pump(200)
         except Exception as e:
-            print("close:", e)
+            self.check("window teardown completed without exception", False, repr(e))
+        if self.root._ccl_tcl_errors:
+            self.check("no Tcl background errors", False, self.root._ccl_tcl_errors[0])
         return self.results
